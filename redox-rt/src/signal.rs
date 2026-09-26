@@ -625,7 +625,7 @@ fn update_excp_stack_bitset(sig_num: i32, flags: SigactionFlags) {
         _ => &[][..],
     };
 
-    let mut bitset = GLOBAL_EXCP_STACK_BITSET.load(Ordering::SeqCst);
+    let mut bitset = GLOBAL_EXCP_STACK_BITSET.load(Ordering::Relaxed);
     for &v in vectors {
         if onstack {
             bitset |= 1 << v;
@@ -633,7 +633,7 @@ fn update_excp_stack_bitset(sig_num: i32, flags: SigactionFlags) {
             bitset &= !(1 << v);
         }
     }
-    GLOBAL_EXCP_STACK_BITSET.store(bitset, Ordering::SeqCst);
+    GLOBAL_EXCP_STACK_BITSET.store(bitset, Ordering::Release);
 }
 
 fn current_sigctl() -> &'static Sigcontrol {

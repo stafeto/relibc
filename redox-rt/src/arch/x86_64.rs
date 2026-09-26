@@ -547,8 +547,7 @@ asmfunction!(__relibc_internal_excpentry: ["
 
     // Check for SA_ONSTACK
     mov eax, dword ptr [rip + {bitset}]
-    mov rdi, fs:[{tcb_sc_off} + {sc_saved_excp_code}]
-    shr rdi, 32
+    mov edi, fs:[{tcb_sc_off}+{sc_saved_excp_code}+4]
     bt eax, edi
     jnc 4f
 

@@ -346,11 +346,7 @@ asmfunction!(__relibc_internal_excpentry: ["
     // Save some registers
     mov gs:[{tcb_sa_off} + {sa_tmp_esp}], esp
     mov gs:[{tcb_sa_off} + {sa_tmp_eax}], eax
-    mov gs:[{tcb_sa_off} + {sa_tmp_edx}], edx
-    mov gs:[{tcb_sa_off} + {sa_tmp_ecx}], ecx
-    mov gs:[{tcb_sa_off} + {sa_tmp_ebx}], ebx
     mov gs:[{tcb_sa_off} + {sa_tmp_edi}], edi
-    mov gs:[{tcb_sa_off} + {sa_tmp_esi}], esi
 
     // Check for SA_ONSTACK
     mov eax, dword ptr [{bitset}]
@@ -360,9 +356,9 @@ asmfunction!(__relibc_internal_excpentry: ["
     jnc 4f
 
     // Check for altstack
-    mov esi, gs:[{tcb_sa_off} + {sa_altstack_top}]
+    mov edi, gs:[{tcb_sa_off} + {sa_altstack_top}]
     
-    cmp esp, esi
+    cmp esp, edi
     ja 3f
 
     cmp esp, gs:[{tcb_sa_off} + {sa_altstack_bottom}]
@@ -371,7 +367,7 @@ asmfunction!(__relibc_internal_excpentry: ["
     jmp 4f
 
 3:
-    mov esp, esi
+    mov esp, edi
 
 4:
     and esp, -{STACK_ALIGN}
@@ -380,12 +376,12 @@ asmfunction!(__relibc_internal_excpentry: ["
     push dword ptr gs:[{tcb_sc_off} + {sc_saved_eip}]
     push dword ptr gs:[{tcb_sc_off} + {sc_saved_eflags}]
 
-    push dword ptr gs:[{tcb_sa_off} + {sa_tmp_edx}]
-    push dword ptr gs:[{tcb_sa_off} + {sa_tmp_ecx}]
+    push edx
+    push ecx
     push dword ptr gs:[{tcb_sa_off} + {sa_tmp_eax}]
-    push dword ptr gs:[{tcb_sa_off} + {sa_tmp_ebx}]
+    push ebx
     push dword ptr gs:[{tcb_sa_off} + {sa_tmp_edi}]
-    push dword ptr gs:[{tcb_sa_off} + {sa_tmp_esi}]
+    push esi
     push ebp
 
     sub esp, 2 * 4 + 29 * 16
@@ -424,11 +420,7 @@ __relibc_internal_excpentry_crit_second:
     sa_tmp_eip = const offset_of!(SigArea, tmp_eip),
     sa_tmp_esp = const offset_of!(SigArea, tmp_esp),
     sa_tmp_eax = const offset_of!(SigArea, tmp_eax),
-    sa_tmp_ebx = const offset_of!(SigArea, tmp_ebx),
-    sa_tmp_ecx = const offset_of!(SigArea, tmp_ecx),
-    sa_tmp_edx = const offset_of!(SigArea, tmp_edx),
     sa_tmp_edi = const offset_of!(SigArea, tmp_edi),
-    sa_tmp_esi = const offset_of!(SigArea, tmp_esi),
     sa_altstack_top = const offset_of!(SigArea, altstack_top),
     sa_altstack_bottom = const offset_of!(SigArea, altstack_bottom),
     sc_saved_eflags = const offset_of!(Sigcontrol, saved_archdep_reg),
