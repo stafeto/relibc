@@ -368,46 +368,6 @@ pub(crate) unsafe extern "fastcall" fn inner_excp_fastcall(stack: usize) {
     unsafe { inner_excp(&mut *(stack as *mut SigStack)) }
 }
 
-#[cfg(not(target_arch = "x86"))]
-pub(crate) unsafe extern "C" fn get_sigaction_stack_c(
-    original_sp: usize,
-    excp_info: usize,
-) -> usize {
-    unsafe { get_sigaction_stack(original_sp, excp_info) }
-}
-
-#[cfg(target_arch = "x86")]
-pub unsafe extern "fastcall" fn get_sigaction_stack_fastcall(
-    original_sp: usize,
-    excp_info: usize,
-) -> usize {
-    unsafe { get_sigaction_stack(original_sp, excp_info) }
-}
-
-#[inline(always)]
-unsafe fn get_sigaction_stack(original_sp: usize, excp_info: usize) -> usize {
-    let os = unsafe { &Tcb::current().unwrap().os_specific };
-    let excp = syscall::Exception::unpack(excp_info, 0);
-    let (sig_num, _) = map_err_code(&excp);
-
-    let action = {
-        let _guard = SIGACTIONS_LOCK.lock();
-        convert_old(&PROC_CONTROL_STRUCT.actions[sig_num as usize - 1])
-    };
-
-    if action.flags.contains(SigactionFlags::ONSTACK) {
-        let altstack_top = unsafe { (&*os.arch.get()).altstack_top };
-        let altstack_bottom = unsafe { (&*os.arch.get()).altstack_bottom };
-
-        // Return altstack if we aren't already on it
-        if original_sp > altstack_top || original_sp <= altstack_bottom {
-            return altstack_top;
-        }
-    }
-
-    original_sp
-}
-
 pub fn get_sigmask() -> Result<u64> {
     let mut mask = 0;
     modify_sigmask(Some(&mut mask), Option::<fn(u64) -> u64>::None)?;
@@ -645,8 +605,35 @@ fn sigaction_inner(
     let new_first = (handler as u64) | (u64::from(flags.bits() & STORED_FLAGS) << 32);
     action.first.store(new_first, Ordering::Relaxed);
     action.user_data.store(mask, Ordering::Relaxed);
-
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    update_excp_stack_bitset(i32::from(signal), flags);
     Ok(())
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn update_excp_stack_bitset(sig_num: i32, flags: SigactionFlags) {
+    use redox_protocols::flag::*;
+    let onstack = flags.contains(SigactionFlags::ONSTACK);
+
+    // see map_err_code
+    let vectors: &[u32] = match sig_num {
+        SIGSEGV => &[14][..],
+        SIGILL => &[6][..],
+        SIGFPE => &[0][..],
+        SIGTRAP => &[3][..],
+        SIGBUS => &[17, 18][..],
+        _ => &[][..],
+    };
+
+    let mut bitset = GLOBAL_EXCP_STACK_BITSET.load(Ordering::SeqCst);
+    for &v in vectors {
+        if onstack {
+            bitset |= 1 << v;
+        } else {
+            bitset &= !(1 << v);
+        }
+    }
+    GLOBAL_EXCP_STACK_BITSET.store(bitset, Ordering::SeqCst);
 }
 
 fn current_sigctl() -> &'static Sigcontrol {

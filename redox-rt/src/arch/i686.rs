@@ -1,12 +1,16 @@
-use core::{cell::SyncUnsafeCell, mem::offset_of, ptr::NonNull, sync::atomic::Ordering};
+use core::{
+    cell::SyncUnsafeCell,
+    mem::offset_of,
+    ptr::NonNull,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 use syscall::*;
 
 use crate::{
     proc::{FdGuard, FdGuardUpper, ForkArgs, fork_inner},
     signal::{
-        PROC_CONTROL_STRUCT, PosixStackt, RtSigarea, SigStack, get_sigaction_stack_fastcall,
-        inner_excp_fastcall, inner_fastcall,
+        PROC_CONTROL_STRUCT, PosixStackt, RtSigarea, SigStack, inner_excp_fastcall, inner_fastcall,
     },
 };
 use redox_protocols::protocol::{ProcCall, RtSigInfo};
@@ -348,28 +352,29 @@ asmfunction!(__relibc_internal_excpentry: ["
     mov gs:[{tcb_sa_off} + {sa_tmp_edi}], edi
     mov gs:[{tcb_sa_off} + {sa_tmp_esi}], esi
 
-    // Args for get_stack
-    mov ecx, esp
-    mov edx, gs:[{tcb_sc_off} + {sc_saved_excp_code}]
+    // Check for SA_ONSTACK
+    mov eax, dword ptr [{bitset}]
+    mov edi, dword ptr gs:[{tcb_sc_off} + {sc_saved_excp_code}]
+    shr edi, 24 
+    bt eax, edi
+    jnc 4f
 
-    mov eax, gs:[{tcb_sa_off} + {sa_altstack_top}]
+    // Check for altstack
+    mov esi, gs:[{tcb_sa_off} + {sa_altstack_top}]
     
-    cmp esp, eax
-    ja 1f
-    
+    cmp esp, esi
+    ja 3f
+
     cmp esp, gs:[{tcb_sa_off} + {sa_altstack_bottom}]
-    jbe 1f
-    
-    jmp 2f
-1:
-    mov esp, eax
-2:
-    and esp, -{STACK_ALIGN}
-    call {get_stack}
-    
-    mov esp, eax
-    and esp, -{STACK_ALIGN}
+    jbe 3f
+
+    jmp 4f
+
+3:
+    mov esp, esi
+
 4:
+    and esp, -{STACK_ALIGN}
     // Now that we have a stack, we can finally start populating the signal stack.
     push dword ptr gs:[{tcb_sa_off} + {sa_tmp_esp}]
     push dword ptr gs:[{tcb_sc_off} + {sc_saved_eip}]
@@ -415,7 +420,7 @@ __relibc_internal_excpentry_crit_second:
     jmp dword ptr gs:[{tcb_sa_off} + {sa_tmp_eip}]
 "] <= [
     inner = sym inner_excp_fastcall,
-    get_stack = sym get_sigaction_stack_fastcall,
+    bitset = sym GLOBAL_EXCP_STACK_BITSET,
     sa_tmp_eip = const offset_of!(SigArea, tmp_eip),
     sa_tmp_esp = const offset_of!(SigArea, tmp_esp),
     sa_tmp_eax = const offset_of!(SigArea, tmp_eax),
@@ -433,6 +438,8 @@ __relibc_internal_excpentry_crit_second:
     tcb_sc_off = const offset_of!(crate::Tcb, os_specific) + offset_of!(RtSigarea, control),
     STACK_ALIGN = const 16,
 ]);
+
+pub(crate) static GLOBAL_EXCP_STACK_BITSET: AtomicU32 = AtomicU32::new(0);
 
 asmfunction!(__relibc_internal_rlct_clone_ret -> usize: ["
     # Load registers
@@ -518,8 +525,8 @@ pub(crate) fn map_err_code(excp: &syscall::Exception) -> (i32, i32) {
         3  /* breakpoint */  => (SIGTRAP, 1 /* TRAP_BRKPT */),
         6  /* invalid_opcode */  => (SIGILL, 1 /* todo */),
         14  /* page */  => (SIGSEGV, if excp.code & 1 == 0 { 1 /* SEGV_MAPERR */ } else { 2 /* SEGV_ACCERR */ }),
-        17  /* alignment_check */  => (SIGTRAP, 1 /* BUS_ADRALN */),
-        18  /* machine_check */  => (SIGTRAP, 3 /* BUS_OBJERR */),
+        17  /* alignment_check */  => (SIGBUS, 1 /* BUS_ADRALN */),
+        18  /* machine_check */  => (SIGBUS, 3 /* BUS_OBJERR */),
         _  => (SIGABRT, 0 /* todo */),
     }
 }

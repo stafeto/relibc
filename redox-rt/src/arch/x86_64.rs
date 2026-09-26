@@ -2,7 +2,7 @@ use core::{
     cell::SyncUnsafeCell,
     mem::offset_of,
     ptr::NonNull,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::{AtomicU8, AtomicU32, Ordering},
 };
 
 use syscall::{
@@ -14,8 +14,8 @@ use crate::{
     Tcb,
     proc::{FdGuard, FdGuardUpper, ForkArgs, fork_inner},
     signal::{
-        PROC_CONTROL_STRUCT, PosixStackt, RtSigarea, SigStack, get_sigaction_stack_c,
-        get_sigaltstack, inner_c, inner_excp_c,
+        PROC_CONTROL_STRUCT, PosixStackt, RtSigarea, SigStack, get_sigaltstack, inner_c,
+        inner_excp_c,
     },
 };
 use redox_protocols::protocol::{ProcCall, RtSigInfo};
@@ -544,14 +544,13 @@ asmfunction!(__relibc_internal_excpentry: ["
     mov fs:[{tcb_sa_off} + {sa_tmp_rax}], rax
     mov fs:[{tcb_sa_off} + {sa_tmp_rdx}], rdx
     mov fs:[{tcb_sa_off} + {sa_tmp_rdi}], rdi
-    mov fs:[{tcb_sa_off} + {sa_tmp_rsi}], rsi
-    mov fs:[{tcb_sa_off} + {sa_tmp_r8}], r8
-    mov fs:[{tcb_sa_off} + {sa_tmp_r10}], r10
-    mov fs:[{tcb_sa_off} + {sa_tmp_r12}], r12
 
-    // Args for get_stack
-    mov rdi, rsp
-    mov rsi, fs:[{tcb_sc_off} + {sc_saved_excp_code}]
+    // Check for SA_ONSTACK
+    mov eax, dword ptr [rip + {bitset}]
+    mov rdi, fs:[{tcb_sc_off} + {sc_saved_excp_code}]
+    shr rdi, 32
+    bt eax, edi
+    jnc 4f
 
     // Check for altstack. If sigaltstack being disabled, it is equivalent
     // to setting 'top' to usize::MAX and 'bottom' to 0.
@@ -565,11 +564,9 @@ asmfunction!(__relibc_internal_excpentry: ["
     cmp rsp, fs:[{tcb_sa_off} + {sa_altstack_bottom}]
     cmovbe rsp, rdx
 
-    and rsp, -{STACK_ALIGN}
-    call {get_stack}
-    mov rsp, rax
-    and rsp, -{STACK_ALIGN}
 4:
+    sub rsp, {REDZONE_SIZE}
+    and rsp, -{STACK_ALIGN}
     // Now that we have a stack, we can finally start initializing the signal stack!
 
     push fs:[{tcb_sa_off} + {sa_tmp_rsp}]
@@ -577,17 +574,17 @@ asmfunction!(__relibc_internal_excpentry: ["
     push fs:[{tcb_sc_off} + {sc_saved_rflags}]
 
     push fs:[{tcb_sa_off} + {sa_tmp_rdi}]
-    push fs:[{tcb_sa_off} + {sa_tmp_rsi}]
+    push rsi
     push fs:[{tcb_sa_off} + {sa_tmp_rdx}]
     push rcx
     push fs:[{tcb_sa_off} + {sa_tmp_rax}]
-    push fs:[{tcb_sa_off} + {sa_tmp_r8}]
+    push r8
     push r9
-    push fs:[{tcb_sa_off} + {sa_tmp_r10}]
+    push r10
     push r11
     push rbx
     push rbp
-    push fs:[{tcb_sa_off} + {sa_tmp_r12}]
+    push r12
     push r13
     push r14
     push r15
@@ -595,7 +592,6 @@ asmfunction!(__relibc_internal_excpentry: ["
     fxsave64 [rsp + 16  * 16]
 
 5:
-    mov [rsp - 4], eax
     sub rsp, 64 // alloc space for ucontext fields
 
     mov rdi, rsp
@@ -641,16 +637,12 @@ __relibc_internal_excpentry_crit_second:
     jmp qword ptr fs:[{tcb_sa_off} + {sa_tmp_rip}]
 "] <= [
     inner_excp = sym inner_excp_c,
-    get_stack = sym get_sigaction_stack_c,
+    bitset = sym GLOBAL_EXCP_STACK_BITSET,
     sa_tmp_rip = const offset_of!(SigArea, tmp_rip),
     sa_tmp_rsp = const offset_of!(SigArea, tmp_rsp),
     sa_tmp_rax = const offset_of!(SigArea, tmp_rax),
     sa_tmp_rdx = const offset_of!(SigArea, tmp_rdx),
     sa_tmp_rdi = const offset_of!(SigArea, tmp_rdi),
-    sa_tmp_rsi = const offset_of!(SigArea, tmp_rsi),
-    sa_tmp_r8 = const offset_of!(SigArea, tmp_r8),
-    sa_tmp_r10 = const offset_of!(SigArea, tmp_r10),
-    sa_tmp_r12 = const offset_of!(SigArea, tmp_r12),
     sa_altstack_top = const offset_of!(SigArea, altstack_top),
     sa_altstack_bottom = const offset_of!(SigArea, altstack_bottom),
     sc_saved_rflags = const offset_of!(Sigcontrol, saved_archdep_reg),
@@ -658,8 +650,11 @@ __relibc_internal_excpentry_crit_second:
     sc_saved_excp_code = const offset_of!(Sigcontrol, saved_excp_code),
     tcb_sa_off = const offset_of!(crate::Tcb, os_specific) + offset_of!(RtSigarea, arch),
     tcb_sc_off = const offset_of!(crate::Tcb, os_specific) + offset_of!(RtSigarea, control),
+    REDZONE_SIZE = const 128,
     STACK_ALIGN = const 16,
 ]);
+
+pub(crate) static GLOBAL_EXCP_STACK_BITSET: AtomicU32 = AtomicU32::new(0);
 
 unsafe extern "C" {
     fn __relibc_internal_sigentry_crit_first();
@@ -741,8 +736,8 @@ pub(crate) fn map_err_code(excp: &syscall::Exception) -> (i32, i32) {
         3  /* breakpoint */  => (SIGTRAP, 1 /* TRAP_BRKPT */),
         6  /* invalid_opcode */  => (SIGILL, 1 /* todo */),
         14  /* page */  => (SIGSEGV, if excp.code & 1 == 0 { 1 /* SEGV_MAPERR */ } else { 2 /* SEGV_ACCERR */ }),
-        17  /* alignment_check */  => (SIGTRAP, 1 /* BUS_ADRALN */),
-        18  /* machine_check */  => (SIGTRAP, 3 /* BUS_OBJERR */),
+        17  /* alignment_check */  => (SIGBUS, 1 /* BUS_ADRALN */),
+        18  /* machine_check */  => (SIGBUS, 3 /* BUS_OBJERR */),
         _  => (SIGABRT, 0 /* todo */),
     }
 }
