@@ -76,7 +76,7 @@ pub unsafe extern "C" fn posix_madvise(addr: *mut c_void, len: size_t, advice: c
     }
 
     match unsafe { Sys::madvise(addr, len, advice) } {
-        Ok(_) => 0,
+        Ok(()) => 0,
         Err(e) => e.0,
     }
 }
