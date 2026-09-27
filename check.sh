@@ -117,11 +117,7 @@ run_redoxer() {
     fi
 
     if [ "$TEST_BIN" != "" ]; then
-        if [ "$IS_HOST" -eq 0 ]; then
-            MAKE_ACTION="$MAKE_ACTION TESTBIN=bins_dynamic/$TEST_BIN"
-        else
-            MAKE_ACTION="$MAKE_ACTION TESTBIN=bins_static/$TEST_BIN"
-        fi
+        MAKE_ACTION="$MAKE_ACTION TESTBIN=bins_dynamic/$TEST_BIN"
     fi
 
     if [ "$CMD_ACTION" == "make" ]; then
