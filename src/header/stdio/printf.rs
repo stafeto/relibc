@@ -929,7 +929,7 @@ pub(crate) unsafe fn inner_printf<T: c_str::Kind>(
                 let string = match unsafe {
                     varargs.get(index, &mut ap, Some((arg.fmtkind, arg.intkind)))
                 } {
-                    VaArg::c_char(i) => fmt_int::<c_uchar, T>(fmt, i.cast_unsigned()),
+                    VaArg::c_char(i) => fmt_int::<_, T>(fmt, i as c_uchar),
                     VaArg::c_double(_) => panic!("this should not be possible"),
                     VaArg::c_longdouble(_) => panic!("this should not be possible"),
                     VaArg::c_int(i) => fmt_int::<c_uint, T>(fmt, i.cast_unsigned()),
