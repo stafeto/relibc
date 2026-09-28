@@ -93,7 +93,10 @@ impl MmapFile {
         let mut stat = crate::header::sys_stat::stat::default();
         Sys::fstat(fd, Out::from_mut(&mut stat))?;
 
-        Self::from_fd(fd, stat.st_size as usize)
+        Self::from_fd(
+            fd,
+            usize::try_from(stat.st_size).expect("st_size should be a positive value"),
+        )
     }
 
     fn from_fd(fd: i32, size: usize) -> core::result::Result<Self, Errno> {
@@ -929,7 +932,7 @@ impl Linker {
             eprintln!("[ld.so]: looking for '{}'", name);
         }
 
-        if name.contains('/') && accessible(&name, F_OK).is_ok() {
+        if name.contains('/') && accessible(name, F_OK).is_ok() {
             if debug {
                 eprintln!("[ld.so]: found at '{}'!", name);
             }
