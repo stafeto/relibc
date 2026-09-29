@@ -1237,10 +1237,19 @@ impl DSO {
                     let resolved = resolve_sym(name, &[global_scope, self.scope()])
                         .map(|(sym, _, _)| sym.as_ptr() as usize)
                         .unwrap_or_else(|| {
-                            panic!(
-                                "unresolved symbol: {name} for soname {:?}",
-                                self.dynamic.soname
-                            )
+                            let my_sym = self
+                                .dynamic
+                                .symbol(reloc.sym)
+                                .expect("PLT reloc without symbol");
+
+                            if my_sym.st_bind() == elf::STB_WEAK {
+                                0
+                            } else {
+                                panic!(
+                                    "unresolved symbol: {name} for soname {:?}",
+                                    self.dynamic.soname
+                                )
+                            }
                         });
 
                     unsafe {
@@ -1465,13 +1474,12 @@ __tlsdesc_dynamic:
     ldp x0, x1, [x0]
 
     mrs x2, tpidr_el0 // ABI ptr
-    ldr x2, [x2] // TCB ptr
-
     sub x1, x1, x2 // tls_descriptor.addend -= tcb
+    ldr x2, [x2] // TCB ptr
 
     ldr x2, [x2, {DTV_PTR_OFF}] // tcb.dtv_ptr
     ldr x2, [x2, x0, lsl #3] // tcb.dtv_ptr[tls_descriptor.module_id]
-    add x0, x2, x1 // tcb.dtv_ptr[tls_descriptor.module_id] + tls_descriptor.addend
+    add x0, x2, x1 // tcb.dtv_ptr[tls_descriptor.module_id] + (tls_descriptor.addend - tcb)
 
     ldp x1, x2, [sp], #16
     ret
