@@ -159,6 +159,7 @@ EXPECT_NAMES=\
 	sys_stat/umask \
 	sys_stat/utimensat \
 	sys_syslog/syslog \
+	sys_uio/basic \
 	time/asctime \
 	time/constants \
 	time/gmtime \
