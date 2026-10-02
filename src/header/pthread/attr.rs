@@ -34,7 +34,13 @@ impl Default for RlctAttr {
             guardsize: Sys::getpagesize(),
             // TODO
             stack: 0,
+            // stafeto commits a stack's pages when it maps them, from the
+            // process's quota: a default thread takes 64 KiB, the layer's
+            // default before relibc.
+            #[cfg(stafeto)]
+            stacksize: 64 * 1024,
             // TODO
+            #[cfg(not(stafeto))]
             stacksize: 1024 * 1024,
             param: sched_param {
                 // TODO
