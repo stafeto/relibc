@@ -326,6 +326,11 @@ pub unsafe fn testcancel() {
 }
 
 pub unsafe fn exit_current_thread(retval: Retval) -> ! {
+    // stafeto: a leaving thread is no longer cancellable, so a cleanup
+    // handler or key destructor that reaches a cancellation point carries
+    // on; one that asks finds the state disabled.
+    #[cfg(stafeto)]
+    let _ = crate::platform::sys::set_cancel_state(header::PTHREAD_CANCEL_DISABLE);
     // Run pthread_cleanup_push/pthread_cleanup_pop destructors.
     unsafe { header::run_destructor_stack() };
 
