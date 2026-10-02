@@ -73,7 +73,8 @@ unsafe extern "C" {
     fn stafeto_thread_leaving();
     /// relibc gave up thread `id` (joined, or detached and ended): its TCB
     /// and stack may go once the kernel told of its end.
-    fn stafeto_thread_release(id: c_int);    /// Asks thread `id` to cancel (deferred: at its next point).
+    fn stafeto_thread_release(id: c_int);
+    /// Asks thread `id` to cancel (deferred: at its next point).
     fn stafeto_cancel(id: c_int) -> c_int;
     /// Whether the calling thread's point acts on a request: 1 or 0.
     fn stafeto_testcancel() -> c_int;
@@ -532,7 +533,7 @@ impl Pal for Sys {
     }
 
     unsafe fn rlct_kill(os_tid: crate::pthread::OsTid, signal: usize) -> Result<()> {
-        Err(Errno(ENOSYS))
+        signal::thread_kill(os_tid, signal)
     }
 
     fn current_os_tid() -> crate::pthread::OsTid {
