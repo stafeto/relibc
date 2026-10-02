@@ -258,7 +258,24 @@ pub unsafe extern "C" fn clock_gettime(clock_id: clockid_t, tp: *mut timespec) -
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/clock_nanosleep.html>.
+///
+/// On stafeto the platform sleeps on the thread's timer: CLOCK_REALTIME
+/// and CLOCK_MONOTONIC, relative or TIMER_ABSTIME. Returns 0 or an error
+/// number; a cancellation point.
+#[cfg(stafeto)]
+#[unsafe(no_mangle)]
+pub extern "C" fn clock_nanosleep(
+    clock_id: clockid_t,
+    flags: c_int,
+    rqtp: *const timespec,
+    rmtp: *mut timespec,
+) -> c_int {
+    unsafe { crate::platform::sys::clock_nanosleep(clock_id, flags, rqtp, rmtp) }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/clock_nanosleep.html>.
 // #[unsafe(no_mangle)]
+#[cfg(not(stafeto))]
 #[expect(unused_variables, reason = "function not yet implemented")]
 pub extern "C" fn clock_nanosleep(
     clock_id: clockid_t,
