@@ -345,6 +345,25 @@ pub unsafe extern "C" fn __relibc_internal_pthread_cleanup_pop(execute: c_int) {
     }
 }
 
+/// Runs `f` with `routine(arg)` pushed as a cleanup handler: it runs if
+/// the thread exits or is cancelled inside `f`, and is popped unrun after.
+#[cfg(stafeto)]
+pub(crate) fn with_cleanup<R>(
+    routine: extern "C" fn(*mut c_void),
+    arg: *mut c_void,
+    f: impl FnOnce() -> R,
+) -> R {
+    let mut entry = CleanupLinkedListEntry {
+        routine,
+        arg,
+        prev: core::ptr::null(),
+    };
+    unsafe { __relibc_internal_pthread_cleanup_push((&raw mut entry).cast()) };
+    let result = f();
+    unsafe { __relibc_internal_pthread_cleanup_pop(0) };
+    result
+}
+
 pub(crate) unsafe fn run_destructor_stack() {
     unsafe { crate::cxa::__cxa_thread_finalize() };
 
