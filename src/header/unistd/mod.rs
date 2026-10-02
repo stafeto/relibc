@@ -1417,9 +1417,22 @@ pub extern "C" fn usleep(useconds: useconds_t) -> c_int {
 /// The `vfork()` function was marked obsolescent in the Open Group Base
 /// Specifications Issue 6, and removed in Issue 7.
 #[deprecated]
+#[cfg(not(stafeto))]
 // #[unsafe(no_mangle)]
 pub extern "C" fn vfork() -> pid_t {
     unimplemented!();
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/009695399/functions/vfork.html>.
+///
+/// On stafeto vfork fails with ENOSYS until the platform has fork: a shell
+/// that tries it reports the error and goes on.
+#[deprecated]
+#[cfg(stafeto)]
+#[unsafe(no_mangle)]
+pub extern "C" fn vfork() -> pid_t {
+    platform::ERRNO.set(errno::ENOSYS);
+    -1
 }
 
 unsafe fn with_argv(
