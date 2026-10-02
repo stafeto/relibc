@@ -813,8 +813,12 @@ pub unsafe extern "C" fn sigsuspend(sigmask: *const sigset_t) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sigwait(set: *const sigset_t, sig: *mut c_int) -> c_int {
     let mut pinfo = mem::MaybeUninit::<siginfo_t>::uninit();
+    // sigwait returns the error number, and leaves errno alone (POSIX).
+    let saved = platform::ERRNO.get();
     if unsafe { sigtimedwait(set, pinfo.as_mut_ptr(), ptr::null_mut()) } < 0 {
-        return -1;
+        let error = platform::ERRNO.get();
+        platform::ERRNO.set(saved);
+        return error;
     }
     let info = unsafe { pinfo.assume_init() };
     unsafe { (*sig) = info.si_signo };
