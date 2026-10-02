@@ -607,10 +607,21 @@ impl Pal for Sys {
 
     unsafe fn readv(fildes: c_int, iov: *const iovec, iovcnt: c_int) -> Result<usize> {
         // Each part in turn; a short read ends the call.
-        let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt.max(0) as usize) };
+        // POSIX: EINVAL for iovcnt outside 1..=IOV_MAX.
+        if !(1..=1024).contains(&iovcnt) {
+            return Err(Errno(EINVAL));
+        }
+        let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
         let mut total = 0;
         for part in parts {
-            let got = ret(unsafe { stafeto_read(fildes, part.iov_base.cast(), part.iov_len) })?;
+            // An error after bytes moved gives the bytes; the next call
+            // meets the error.
+            let got = match ret(unsafe { stafeto_read(fildes, part.iov_base.cast(), part.iov_len) })
+            {
+                Ok(got) => got,
+                Err(_) if total > 0 => break,
+                Err(error) => return Err(error),
+            };
             total += got as usize;
             if (got as usize) < part.iov_len {
                 break;
@@ -715,10 +726,21 @@ impl Pal for Sys {
 
     unsafe fn writev(fildes: c_int, iov: *const iovec, iovcnt: c_int) -> Result<usize> {
         // Each part in turn; a short write ends the call.
-        let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt.max(0) as usize) };
+        // POSIX: EINVAL for iovcnt outside 1..=IOV_MAX.
+        if !(1..=1024).contains(&iovcnt) {
+            return Err(Errno(EINVAL));
+        }
+        let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
         let mut total = 0;
         for part in parts {
-            let wrote = ret(unsafe { stafeto_write(fildes, part.iov_base.cast(), part.iov_len) })?;
+            // An error after bytes moved gives the bytes; the next call
+            // meets the error.
+            let wrote =
+                match ret(unsafe { stafeto_write(fildes, part.iov_base.cast(), part.iov_len) }) {
+                    Ok(wrote) => wrote,
+                    Err(_) if total > 0 => break,
+                    Err(error) => return Err(error),
+                };
             total += wrote as usize;
             if (wrote as usize) < part.iov_len {
                 break;
