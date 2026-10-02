@@ -101,7 +101,8 @@ const PLATFORM_ABI: u64 = mem::size_of::<OsSpecific>() as u64
 
 /// The platform's part of the start of a process, once its TCB exists:
 /// checks the layer's ABI word and attaches the main thread. A process
-/// whose layer does not match says why on fd 2 and ends with status 127.
+/// whose layer does not match says why on fd 2 and ends with status 125,
+/// the status of a failed start of the layer's own (posix-crt).
 pub(crate) unsafe fn init() {
     // SAFETY: the layer defines the word and never writes it.
     let layer = unsafe { ptr::read_volatile(&raw const STAFETO_PLATFORM_ABI) };
@@ -110,7 +111,7 @@ pub(crate) unsafe fn init() {
             super::FileWriter::new(2),
             "relibc: stafeto platform ABI {layer:#x}, relibc expects {PLATFORM_ABI:#x}"
         );
-        Sys::exit(127);
+        Sys::exit(125);
     }
     let tcb = unsafe { Tcb::current() }.map_or(ptr::null_mut(), |tcb| ptr::from_mut(tcb).cast());
     if let Err(Errno(errno)) = ret(unsafe { stafeto_init(tcb) } as isize) {
@@ -118,7 +119,7 @@ pub(crate) unsafe fn init() {
             super::FileWriter::new(2),
             "relibc: the stafeto layer did not attach the main thread: errno {errno}"
         );
-        Sys::exit(127);
+        Sys::exit(125);
     }
 }
 
@@ -144,7 +145,7 @@ pub(crate) fn thread_started() {
             super::FileWriter::new(2),
             "relibc: the stafeto layer did not attach a new thread: errno {errno}"
         );
-        Sys::exit(127);
+        Sys::exit(125);
     }
 }
 
