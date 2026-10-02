@@ -1,4 +1,5 @@
 use super::{sigset_t, stack_t};
+#[allow(unused_imports)]
 use crate::platform::types::{c_longlong, c_uchar, c_uint, c_ulong, c_ulonglong, c_ushort};
 use core::arch::global_asm;
 
@@ -76,6 +77,7 @@ pub(crate) type ucontext_t = ucontext;
 /// A machine-specific representation of the saved context.
 pub(crate) type mcontext_t = mcontext;
 
+#[cfg(not(target_arch = "aarch64"))]
 #[repr(C)]
 pub struct ucontext {
     pub uc_flags: c_ulong,
@@ -88,6 +90,23 @@ pub struct ucontext {
     /// The set of signals that are blocked when this context is active.
     pub uc_sigmask: sigset_t,
     __private: [c_uchar; 512],
+}
+
+/// AArch64 Linux (asm/ucontext.h): the mask, room for a wider one, then
+/// the machine context aligned to 16.
+#[cfg(target_arch = "aarch64")]
+#[repr(C)]
+pub struct ucontext {
+    pub uc_flags: c_ulong,
+    /// Pointer to the context that is resumed when this context returns.
+    pub uc_link: *mut ucontext_t,
+    /// The stack used by this context.
+    pub uc_stack: stack_t,
+    /// The set of signals that are blocked when this context is active.
+    pub uc_sigmask: sigset_t,
+    __unused: [c_uchar; 120],
+    /// A machine-specific representation of the saved context.
+    pub uc_mcontext: mcontext_t,
 }
 
 #[repr(C)]
@@ -115,9 +134,40 @@ pub struct _libc_fpxreg {
 pub struct _libc_xmmreg {
     pub element: [c_uint; 4],
 }
+#[cfg(not(target_arch = "aarch64"))]
 #[repr(C)]
 pub struct mcontext {
     pub gregs: [c_longlong; 23], // TODO: greg_t?
     pub fpregs: *mut _libc_fpstate,
     __private: [c_ulonglong; 8],
 }
+
+/// AArch64 Linux (asm/sigcontext.h, struct sigcontext): x0 to x30, sp, pc
+/// and pstate, then records of further state (the FP and SIMD registers
+/// first) in `__reserved`.
+#[cfg(target_arch = "aarch64")]
+#[repr(C, align(16))]
+pub struct mcontext {
+    pub fault_address: c_ulonglong,
+    pub regs: [c_ulonglong; 31],
+    pub sp: c_ulonglong,
+    pub pc: c_ulonglong,
+    pub pstate: c_ulonglong,
+    pub __reserved: [c_uchar; 4096],
+}
+
+// The layouts the kernel uses: those of the libc crate for this target.
+#[cfg(all(target_arch = "aarch64", feature = "check_against_libc_crate"))]
+const _: () = {
+    use __libc_only_for_layout_checks as libc;
+    use core::mem::{align_of, offset_of, size_of};
+    assert!(size_of::<ucontext>() == size_of::<libc::ucontext_t>());
+    assert!(offset_of!(ucontext, uc_sigmask) == offset_of!(libc::ucontext_t, uc_sigmask));
+    assert!(offset_of!(ucontext, uc_mcontext) == offset_of!(libc::ucontext_t, uc_mcontext));
+    assert!(size_of::<mcontext>() == size_of::<libc::mcontext_t>());
+    assert!(align_of::<mcontext>() == align_of::<libc::mcontext_t>());
+    assert!(offset_of!(mcontext, regs) == offset_of!(libc::mcontext_t, regs));
+    assert!(offset_of!(mcontext, sp) == offset_of!(libc::mcontext_t, sp));
+    assert!(offset_of!(mcontext, pc) == offset_of!(libc::mcontext_t, pc));
+    assert!(offset_of!(mcontext, pstate) == offset_of!(libc::mcontext_t, pstate));
+};
