@@ -276,6 +276,10 @@ pub unsafe fn join(thread: &Pthread) -> Result<Retval, Errno> {
     }
 
     // Waitval starts locked, and is unlocked when the thread finishes.
+    // stafeto: pthread_join is a cancellation point (POSIX).
+    #[cfg(stafeto)]
+    let retval = *thread.waitval.wait_cancellable();
+    #[cfg(not(stafeto))]
     let retval = *thread.waitval.wait();
 
     // We have now awaited the thread and received its return value. POSIX states that the
