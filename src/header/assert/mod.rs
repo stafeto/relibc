@@ -37,5 +37,11 @@ pub unsafe extern "C" fn __assert_fail(
 
     eprintln!("{}: {}:{}: Assertion `{}` failed.", func, file, line, cond);
 
+    // stafeto: abort ends the process as SIGABRT does (status 134).
+    #[cfg(stafeto)]
+    unsafe {
+        crate::header::stdlib::abort()
+    };
+    #[cfg(not(stafeto))]
     core::intrinsics::abort();
 }
