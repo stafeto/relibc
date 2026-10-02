@@ -100,6 +100,10 @@ unsafe extern "C" {
     fn stafeto_pread(fd: c_int, buf: *mut u8, len: usize, off: off_t) -> isize;
     fn stafeto_pwrite(fd: c_int, buf: *const u8, len: usize, off: off_t) -> isize;
     fn stafeto_umask(mask: mode_t) -> mode_t;
+    /// The user and group ids as setuid, seteuid, setgid and setegid set
+    /// them (-1 keeps one).
+    fn stafeto_setresuid(real: uid_t, effective: uid_t, saved: uid_t) -> c_int;
+    fn stafeto_setresgid(real: gid_t, effective: gid_t, saved: gid_t) -> c_int;
     fn stafeto_uname(out: *mut utsname) -> c_int;
     /// Asks thread `id` to cancel (deferred: at its next point).
     fn stafeto_cancel(id: c_int) -> c_int;
@@ -110,7 +114,7 @@ unsafe extern "C" {
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 3;
+const PLATFORM_INTERFACE: u64 = 4;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -646,11 +650,11 @@ impl Pal for Sys {
     }
 
     fn setresgid(rgid: gid_t, egid: gid_t, sgid: gid_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_setresgid(rgid, egid, sgid) } as isize).map(|_| ())
     }
 
     fn setresuid(ruid: uid_t, euid: uid_t, suid: uid_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_setresuid(ruid, euid, suid) } as isize).map(|_| ())
     }
 
     fn setsid() -> Result<c_int> {
