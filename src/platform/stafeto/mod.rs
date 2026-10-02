@@ -114,6 +114,13 @@ unsafe extern "C" {
     /// posix_spawn of the program at `path` with `argv` and `envp`
     /// (NULL-ended; null for none) and the attributes at `attributes`
     /// (null for none): the child's PID.
+    /// execve of the program at `path` with `argv` and `envp`: it
+    /// returns only with the negated errno.
+    fn stafeto_exec(
+        path: *const c_char,
+        argv: *const *const c_char,
+        envp: *const *const c_char,
+    ) -> c_int;
     fn stafeto_spawn(
         path: *const c_char,
         argv: *const *const c_char,
@@ -160,7 +167,7 @@ struct SpawnAction {
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 9;
+const PLATFORM_INTERFACE: u64 = 10;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -314,8 +321,20 @@ impl Pal for Sys {
         ret(unsafe { stafeto_dup2(fildes, fildes2) } as isize).map(|v| v as c_int)
     }
 
+    /// The layer's exec: a new process for the record with the loader,
+    /// the record moved to it once the image is ready (stafeto 5c).
+    /// fexecve stays ENOSYS: the layer opens a program by its path.
     unsafe fn execve(path: CStr, argv: *const *mut c_char, envp: *const *mut c_char) -> Result<()> {
-        Err(Errno(ENOSYS))
+        static NONE: [usize; 1] = [0];
+        let none = NONE.as_ptr().cast::<*const c_char>();
+        let list = |p: *const *mut c_char| {
+            if p.is_null() {
+                none
+            } else {
+                p.cast::<*const c_char>()
+            }
+        };
+        ret(unsafe { stafeto_exec(path.as_ptr(), list(argv), list(envp)) } as isize).map(drop)
     }
     unsafe fn fexecve(
         fildes: c_int,
