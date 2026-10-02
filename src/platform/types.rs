@@ -103,9 +103,19 @@ pub type ino_t = c_ulonglong;
 /// The `reclen_t` type provided in [`sys/types.h`](crate::header::sys_types).
 pub type reclen_t = c_ushort;
 /// The `nlink_t` type provided in [`sys/types.h`](crate::header::sys_types).
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 pub type nlink_t = c_ulong;
+/// The `nlink_t` type provided in [`sys/types.h`](crate::header::sys_types):
+/// 32 bits on AArch64 Linux.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+pub type nlink_t = c_uint;
 /// The `blksize_t` type provided in [`sys/types.h`](crate::header::sys_types).
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 pub type blksize_t = c_long;
+/// The `blksize_t` type provided in [`sys/types.h`](crate::header::sys_types):
+/// 32 bits on AArch64 Linux.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+pub type blksize_t = c_int;
 /// The `blkcnt_t` type provided in [`sys/types.h`](crate::header::sys_types).
 pub type blkcnt_t = c_longlong;
 /// The `key_t` type provided in [`sys/types.h`](crate::header::sys_types).
