@@ -67,6 +67,13 @@ unsafe extern "C" {
     fn stafeto_exit_thread(stack: *mut c_void, size: usize) -> !;
     fn stafeto_sched_yield() -> c_int;
     fn stafeto_nanosleep(request: *const timespec, remaining: *mut timespec) -> c_int;
+    /// clock_nanosleep: 0 or an error number.
+    fn stafeto_clock_nanosleep(
+        clock: clockid_t,
+        flags: c_int,
+        request: *const timespec,
+        remaining: *mut timespec,
+    ) -> c_int;
     /// The new thread's part of its start, once its TCB is installed.
     fn stafeto_thread_started() -> c_int;
     /// The calling thread leaves: every signal masked, no new cancellation.
@@ -150,6 +157,16 @@ pub(crate) fn thread_leaving() {
 /// relibc gave up the thread `os_tid` (`dealloc_thread`).
 pub(crate) fn thread_release(os_tid: crate::pthread::OsTid) {
     unsafe { stafeto_thread_release(os_tid.thread_id as c_int) }
+}
+
+/// clock_nanosleep on the platform: 0 or an error number.
+pub(crate) unsafe fn clock_nanosleep(
+    clock: clockid_t,
+    flags: c_int,
+    request: *const timespec,
+    remaining: *mut timespec,
+) -> c_int {
+    unsafe { stafeto_clock_nanosleep(clock, flags, request, remaining) }
 }
 
 /// Asks thread `os_tid` to cancel at its next cancellation point.
