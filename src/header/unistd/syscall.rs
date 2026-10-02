@@ -1,6 +1,7 @@
 use crate::platform::types::c_long;
 
 /// Non-POSIX, see <https://www.man7.org/linux/man-pages/man3/getopt.3.html>.
+#[cfg(not(stafeto))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn syscall(sysno: c_long, mut args: ...) -> c_long {
     let a1 = unsafe { args.next_arg::<usize>() };
@@ -11,4 +12,13 @@ pub unsafe extern "C" fn syscall(sysno: c_long, mut args: ...) -> c_long {
     let a6 = unsafe { args.next_arg::<usize>() };
 
     (unsafe { sc::syscall6(sysno as usize, a1, a2, a3, a4, a5, a6) }) as c_long
+}
+
+/// Non-POSIX. stafeto has no Linux system calls: every number fails with
+/// ENOSYS.
+#[cfg(stafeto)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn syscall(_sysno: c_long, _args: ...) -> c_long {
+    crate::platform::ERRNO.set(crate::header::errno::ENOSYS);
+    -1
 }
