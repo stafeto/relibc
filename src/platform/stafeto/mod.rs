@@ -51,10 +51,33 @@ unsafe extern "C" {
     /// Attaches the calling thread, whose TCB is `tcb`, to the layer: its
     /// block in the TCB, its channel, timer and entry of signals.
     fn stafeto_init(tcb: *mut c_void) -> c_int;
+    /// Waits while `*addr == val`, until a wake, an entry of signals or the
+    /// absolute CLOCK_MONOTONIC `deadline` in ns (u64::MAX: none).
+    fn stafeto_futex_wait(addr: *mut u32, val: u32, deadline: u64) -> c_int;
+    /// Wakes up to `count` waiters on `addr`, highest level first.
+    fn stafeto_futex_wake(addr: *mut u32, count: u32) -> u32;
+    /// Makes a thread that starts on `stack` (the words relibc pushed: the
+    /// shim, then its four arguments) with the thread block `block`, in the
+    /// TCB relibc made for it; returns its number (> 0).
+    fn stafeto_thread_create(stack: *mut usize, block: *mut c_void) -> c_int;
+    /// The calling thread's number.
+    fn stafeto_thread_id() -> c_int;
+    /// Ends the calling thread; the layer takes its stack back once the
+    /// kernel told of its end.
+    fn stafeto_exit_thread(stack: *mut c_void, size: usize) -> !;
+    fn stafeto_sched_yield() -> c_int;
+    fn stafeto_nanosleep(request: *const timespec, remaining: *mut timespec) -> c_int;
+    /// The new thread's part of its start, once its TCB is installed.
+    fn stafeto_thread_started() -> c_int;
+    /// The calling thread leaves: every signal masked, no new cancellation.
+    fn stafeto_thread_leaving();
+    /// relibc gave up thread `id` (joined, or detached and ended): its TCB
+    /// and stack may go once the kernel told of its end.
+    fn stafeto_thread_release(id: c_int);
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 1;
+const PLATFORM_INTERFACE: u64 = 2;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -99,6 +122,29 @@ mod epoll;
 mod ptrace;
 mod signal;
 mod socket;
+
+/// The new thread's part of its start (`new_thread_shim`, after its TCB
+/// is installed): its entry of signals. A failure ends the process.
+pub(crate) fn thread_started() {
+    if let Err(Errno(errno)) = ret(unsafe { stafeto_thread_started() } as isize) {
+        let _ = writeln!(
+            super::FileWriter::new(2),
+            "relibc: the stafeto layer did not attach a new thread: errno {errno}"
+        );
+        Sys::exit(127);
+    }
+}
+
+/// The calling thread leaves (`exit_current_thread`, before relibc gives
+/// its TCB away): no signal handler and no cancellation from here on.
+pub(crate) fn thread_leaving() {
+    unsafe { stafeto_thread_leaving() }
+}
+
+/// relibc gave up the thread `os_tid` (`dealloc_thread`).
+pub(crate) fn thread_release(os_tid: crate::pthread::OsTid) {
+    unsafe { stafeto_thread_release(os_tid.thread_id as c_int) }
+}
 
 /// The stafeto implementation of [`Pal`].
 pub struct Sys;
@@ -167,8 +213,8 @@ impl Pal for Sys {
     fn exit(status: c_int) -> ! {
         unsafe { stafeto_exit(status) }
     }
-    unsafe fn exit_thread(_stack_base: *mut (), _stack_size: usize) -> ! {
-        unsafe { stafeto_exit(0) }
+    unsafe fn exit_thread(stack_base: *mut (), stack_size: usize) -> ! {
+        unsafe { stafeto_exit_thread(stack_base.cast(), stack_size) }
     }
 
     fn fchdir(fildes: c_int) -> Result<()> {
@@ -221,17 +267,21 @@ impl Pal for Sys {
 
     #[inline]
     unsafe fn futex_wait(addr: *mut u32, val: u32, deadline: Option<&timespec>) -> Result<()> {
-        // One thread until the layer's waits by address come: nobody
-        // else can change the word, so a wait would never end.
-        if unsafe { core::ptr::read_volatile(addr) } != val {
-            return Err(Errno(crate::header::errno::EAGAIN));
-        }
-        Err(Errno(ENOSYS))
+        // The deadline is absolute on CLOCK_MONOTONIC, as for FUTEX_WAIT_BITSET.
+        let deadline = deadline.map_or(u64::MAX, |d| {
+            if d.tv_sec < 0 {
+                0
+            } else {
+                (d.tv_sec as u64)
+                    .saturating_mul(1_000_000_000)
+                    .saturating_add(d.tv_nsec.clamp(0, 999_999_999) as u64)
+            }
+        });
+        ret(unsafe { stafeto_futex_wait(addr, val, deadline) } as isize).map(|_| ())
     }
     #[inline]
     unsafe fn futex_wake(addr: *mut u32, num: u32) -> Result<u32> {
-        // One thread: nobody waits.
-        Ok(0)
+        Ok(unsafe { stafeto_futex_wake(addr, num) })
     }
 
     unsafe fn utimensat(
@@ -330,7 +380,7 @@ impl Pal for Sys {
     }
 
     fn gettid() -> pid_t {
-        unsafe { stafeto_getpid() }
+        unsafe { stafeto_thread_id() }
     }
 
     fn gettimeofday(tp: Out<timeval>, tzp: Option<Out<timezone>>) -> Result<()> {
@@ -424,7 +474,7 @@ impl Pal for Sys {
     }
 
     unsafe fn nanosleep(rqtp: *const timespec, rmtp: *mut timespec) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_nanosleep(rqtp, rmtp) } as isize).map(|_| ())
     }
 
     fn openat(dirfd: c_int, path: CStr, oflag: c_int, mode: mode_t) -> Result<c_int> {
@@ -446,9 +496,14 @@ impl Pal for Sys {
 
     unsafe fn rlct_clone(
         stack: *mut usize,
-        _os_specific: &mut OsSpecific,
+        os_specific: &mut OsSpecific,
     ) -> Result<crate::pthread::OsTid> {
-        Err(Errno(ENOSYS))
+        let block = os_specific.0.get().cast();
+        ret(unsafe { stafeto_thread_create(stack, block) } as isize).map(|id| {
+            crate::pthread::OsTid {
+                thread_id: id as usize,
+            }
+        })
     }
 
     unsafe fn rlct_kill(os_tid: crate::pthread::OsTid, signal: usize) -> Result<()> {
@@ -456,7 +511,9 @@ impl Pal for Sys {
     }
 
     fn current_os_tid() -> crate::pthread::OsTid {
-        crate::pthread::OsTid { thread_id: 1 }
+        crate::pthread::OsTid {
+            thread_id: unsafe { stafeto_thread_id() } as usize,
+        }
     }
 
     fn read(fildes: c_int, buf: &mut [u8]) -> Result<usize> {
@@ -485,7 +542,7 @@ impl Pal for Sys {
     }
 
     fn sched_yield() -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_sched_yield() } as isize).map(|_| ())
     }
 
     unsafe fn setgroups(size: size_t, list: *const gid_t) -> Result<()> {
