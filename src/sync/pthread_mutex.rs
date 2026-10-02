@@ -103,7 +103,7 @@ impl RlctMutex {
                 }
                 // CAS failed, but the mutex was error-checking and we already own the lock.
                 Err(thread) if thread & INDEX_MASK == this_thread && self.ty == Ty::Errck => {
-                    return Err(Errno(EAGAIN));
+                    return Err(Errno(EDEADLK));
                 }
                 // CAS spuriously failed, simply retry the CAS. TODO: Use core::hint::spin_loop()?
                 Err(thread) if thread & INDEX_MASK == 0 => {
@@ -197,9 +197,6 @@ impl RlctMutex {
 
         match result {
             Ok(_) => Ok(()),
-            Err(index) if index & INDEX_MASK == this_thread && self.ty == Ty::Errck => {
-                Err(Errno(EDEADLK))
-            }
             Err(_) => Err(Errno(EBUSY)),
         }
     }
