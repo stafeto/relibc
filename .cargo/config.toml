@@ -1,0 +1,24 @@
+# The stafeto branch builds offline (cargo --frozen --offline): every
+# dependency of Cargo.lock is in vendor/ (cargo vendor --versioned-dirs).
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://gitlab.redox-os.org/andypython/object?branch=new"]
+git = "https://gitlab.redox-os.org/andypython/object"
+branch = "new"
+replace-with = "vendored-sources"
+
+[source."git+https://gitlab.redox-os.org/redox-os/kernel/"]
+git = "https://gitlab.redox-os.org/redox-os/kernel/"
+replace-with = "vendored-sources"
+
+[source."git+https://gitlab.redox-os.org/redox-os/redox-buffer-pool.git"]
+git = "https://gitlab.redox-os.org/redox-os/redox-buffer-pool.git"
+replace-with = "vendored-sources"
+
+[source."git+https://gitlab.redox-os.org/redox-os/redox-rings.git"]
+git = "https://gitlab.redox-os.org/redox-os/redox-rings.git"
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
