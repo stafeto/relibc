@@ -111,10 +111,13 @@ unsafe extern "C" {
     fn stafeto_testcancel() -> c_int;
     fn stafeto_setcancelstate(state: c_int, old: *mut c_int) -> c_int;
     fn stafeto_setcanceltype(kind: c_int, old: *mut c_int) -> c_int;
+    /// posix_spawn of the program at `path` with the spawn-flags
+    /// `flags` and the process group `pgroup`: the child's PID.
+    fn stafeto_spawn(path: *const c_char, flags: c_int, pgroup: pid_t) -> pid_t;
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 4;
+const PLATFORM_INTERFACE: u64 = 5;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -753,7 +756,9 @@ impl Pal for Sys {
         true
     }
 
-    #[expect(unused_variables, reason = "function not yet implemented")]
+    /// The layer makes the child from the program and the arguments the
+    /// table of stafeto's boot gives it: `argv` and `envp` do not reach
+    /// it yet, and file actions are EINVAL.
     unsafe fn spawn(
         program: CStr,
         fac: Option<&crate::header::spawn::posix_spawn_file_actions_t>,
@@ -761,6 +766,10 @@ impl Pal for Sys {
         argv: crate::iter::NulTerminated<*mut c_char>,
         envp: Option<crate::iter::NulTerminated<*mut c_char>>,
     ) -> Result<pid_t> {
-        Err(Errno(ENOSYS))
+        if fac.is_some_and(|actions| actions.into_iter().next().is_some()) {
+            return Err(Errno(EINVAL));
+        }
+        let (flags, pgroup) = fat.map_or((0, 0), |attr| (c_int::from(attr.flags), attr.pgroup));
+        ret(unsafe { stafeto_spawn(program.as_ptr(), flags, pgroup) } as isize).map(|v| v as pid_t)
     }
 }
