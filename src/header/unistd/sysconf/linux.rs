@@ -130,6 +130,8 @@ pub(super) fn sysconf_impl(name: c_int) -> c_long {
     // Values from musl which we can assume is correct.
     match name {
         _SC_CLK_TCK => 100,
+        #[cfg(stafeto)]
+        _SC_ARG_MAX => ARG_MAX as c_long,
         // TODO: getrlimit
         _SC_CHILD_MAX => -1,
         _SC_NGROUPS_MAX => {

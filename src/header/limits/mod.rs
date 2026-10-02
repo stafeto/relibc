@@ -24,6 +24,12 @@ pub const PASS_MAX: usize = 128;
 pub const PATH_MAX: usize = 4096;
 #[cfg(stafeto)]
 pub const PATH_MAX: usize = 512;
+/// Maximum length of the arguments of the exec functions with the
+/// environment: the stafeto layer takes 64 KiB of strings and pointers of
+/// `argv` and `envp` (proto_loader::ARG_MAX); limits.h defines the same
+/// value (cbindgen.toml).
+#[cfg(stafeto)]
+pub const ARG_MAX: usize = 65536;
 /// Maximum number of simultaneous supplementary group IDs per process.
 pub const NGROUPS_MAX: usize = 65536;
 /// Maximum number of `iovec` structures that one process has available for
