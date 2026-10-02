@@ -27,6 +27,36 @@ use crate::{
     },
 };
 
+// The layer reads and writes these with the Linux AArch64 layouts and
+// numbers relibc uses: `struct sigaction`, a 64-bit sigset_t, siginfo_t.
+unsafe extern "C" {
+    fn stafeto_sigaction(sig: c_int, act: *const sigaction, old: *mut sigaction) -> c_int;
+    fn stafeto_sigprocmask(how: c_int, set: *const sigset_t, old: *mut sigset_t) -> c_int;
+    fn stafeto_sigpending(set: *mut sigset_t) -> c_int;
+    fn stafeto_sigsuspend(mask: *const sigset_t) -> c_int;
+    fn stafeto_sigtimedwait(
+        set: *const sigset_t,
+        info: *mut siginfo_t,
+        timeout: *const timespec,
+    ) -> c_int;
+    fn stafeto_raise(sig: c_int) -> c_int;
+    fn stafeto_kill(pid: pid_t, sig: c_int) -> c_int;
+    fn stafeto_thread_kill(id: c_int, sig: c_int) -> c_int;
+}
+
+fn ret(value: c_int) -> Result<c_int> {
+    if value < 0 {
+        Err(Errno(-value))
+    } else {
+        Ok(value)
+    }
+}
+
+/// pthread_kill: the platform's thread number is the OsTid.
+pub(crate) fn thread_kill(os_tid: crate::pthread::OsTid, signal: usize) -> Result<()> {
+    ret(unsafe { stafeto_thread_kill(os_tid.thread_id as c_int, signal as c_int) }).map(|_| ())
+}
+
 impl PalSignal for Sys {
     #[expect(deprecated)]
     fn getitimer(which: c_int, out: &mut itimerval) -> Result<()> {
@@ -34,7 +64,7 @@ impl PalSignal for Sys {
     }
 
     fn kill(pid: pid_t, sig: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_kill(pid, sig) }).map(|_| ())
     }
     fn sigqueue(pid: pid_t, sig: c_int, val: sigval) -> Result<()> {
         Err(Errno(ENOSYS))
@@ -45,7 +75,7 @@ impl PalSignal for Sys {
     }
 
     fn raise(sig: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_raise(sig) }).map(|_| ())
     }
 
     #[expect(deprecated)]
@@ -58,7 +88,9 @@ impl PalSignal for Sys {
         act: Option<&sigaction>,
         oact: Option<&mut sigaction>,
     ) -> Result<(), Errno> {
-        Err(Errno(ENOSYS))
+        let act = act.map_or(ptr::null(), ptr::from_ref);
+        let old = oact.map_or(ptr::null_mut(), ptr::from_mut);
+        ret(unsafe { stafeto_sigaction(sig, act, old) }).map(|_| ())
     }
 
     unsafe fn sigaltstack(ss: Option<&stack_t>, old_ss: Option<&mut stack_t>) -> Result<()> {
@@ -66,15 +98,20 @@ impl PalSignal for Sys {
     }
 
     fn sigpending(set: &mut sigset_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_sigpending(set) }).map(|_| ())
     }
 
     fn sigprocmask(how: c_int, set: Option<&sigset_t>, oset: Option<&mut sigset_t>) -> Result<()> {
-        Err(Errno(ENOSYS))
+        let set = set.map_or(ptr::null(), ptr::from_ref);
+        let old = oset.map_or(ptr::null_mut(), ptr::from_mut);
+        ret(unsafe { stafeto_sigprocmask(how, set, old) }).map(|_| ())
     }
 
     fn sigsuspend(mask: &sigset_t) -> Errno {
-        Errno(ENOSYS)
+        match ret(unsafe { stafeto_sigsuspend(mask) }) {
+            Err(errno) => errno,
+            Ok(_) => Errno(crate::header::errno::EINTR),
+        }
     }
 
     fn sigtimedwait(
@@ -82,6 +119,8 @@ impl PalSignal for Sys {
         sig: Option<&mut siginfo_t>,
         tp: Option<&timespec>,
     ) -> Result<c_int> {
-        Err(Errno(ENOSYS))
+        let info = sig.map_or(ptr::null_mut(), ptr::from_mut);
+        let timeout = tp.map_or(ptr::null(), ptr::from_ref);
+        ret(unsafe { stafeto_sigtimedwait(set, info, timeout) })
     }
 }

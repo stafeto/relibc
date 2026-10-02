@@ -533,7 +533,7 @@ impl Pal for Sys {
     }
 
     unsafe fn rlct_kill(os_tid: crate::pthread::OsTid, signal: usize) -> Result<()> {
-        Err(Errno(ENOSYS))
+        signal::thread_kill(os_tid, signal)
     }
 
     fn current_os_tid() -> crate::pthread::OsTid {
