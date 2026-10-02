@@ -10,8 +10,6 @@ use crate::{
 
 use crate::platform::{Pal, Sys, types::c_int};
 
-use super::FutexWaitResult;
-
 pub struct RlctMutex {
     // Actual locking word.
     inner: AtomicUint,
@@ -72,6 +70,9 @@ impl RlctMutex {
         todo_skip!(0, "pthread robust mutexes: not implemented");
         Ok(())
     }
+    /// Locks, waiting until `deadline` on CLOCK_REALTIME if one is given.
+    /// The deadline is looked at only when the lock is taken: a mutex free
+    /// now is locked whatever the deadline (POSIX).
     fn lock_inner(&self, deadline: Option<&timespec>) -> Result<(), Errno> {
         let this_thread = os_tid_invalid_after_fork();
 
@@ -139,11 +140,21 @@ impl RlctMutex {
 
                     // If the mutex is not robust, simply futex_wait until unblocked.
                     //crate::sync::futex_wait(&self.inner, inner | WAITING_BIT, None);
-                    if crate::sync::futex_wait(&self.inner, thread, deadline)
-                        == FutexWaitResult::TimedOut
-                    {
-                        return Err(Errno(ETIMEDOUT));
-                    }
+                    let monotonic = match deadline {
+                        Some(deadline) if !(0..1_000_000_000).contains(&deadline.tv_nsec) => {
+                            return Err(Errno(EINVAL));
+                        }
+                        Some(deadline) => Some(
+                            crate::header::time::timespec_realtime_to_monotonic(deadline)?,
+                        ),
+                        None => None,
+                    };
+                    // A wait that timed out goes round again: the deadline
+                    // is on the calendar, which may have stepped back while
+                    // the thread waited; the conversion above says
+                    // ETIMEDOUT once the calendar passed it (POSIX: the new
+                    // value of CLOCK_REALTIME applies to absolute waits).
+                    let _ = crate::sync::futex_wait(&self.inner, thread, monotonic.as_ref());
                     waited = WAITING_BIT;
                 }
             }
@@ -152,6 +163,7 @@ impl RlctMutex {
     pub fn lock(&self) -> Result<(), Errno> {
         self.lock_inner(None)
     }
+    /// `lock` until `deadline`, an absolute time on CLOCK_REALTIME.
     pub fn lock_with_timeout(&self, deadline: &timespec) -> Result<(), Errno> {
         self.lock_inner(Some(deadline))
     }
