@@ -75,12 +75,15 @@ impl RlctMutex {
     fn lock_inner(&self, deadline: Option<&timespec>) -> Result<(), Errno> {
         let this_thread = os_tid_invalid_after_fork();
 
-        //let mut spins_left = SPIN_COUNT;
+        // A thread that waited takes the lock with WAITING_BIT set: other
+        // threads may still wait, and `unlock` wakes one of them only when
+        // the bit is set. So each unlock wakes one waiter and none is lost.
+        let mut waited = 0;
 
         loop {
             let result = self.inner.compare_exchange_weak(
                 STATE_UNLOCKED,
-                this_thread,
+                this_thread | waited,
                 Ordering::Acquire,
                 Ordering::Relaxed,
             );
@@ -104,6 +107,17 @@ impl RlctMutex {
                 }
                 // CAS spuriously failed, simply retry the CAS. TODO: Use core::hint::spin_loop()?
                 Err(thread) if thread & INDEX_MASK == 0 => {
+                    continue;
+                }
+                // Some other thread owns the lock and nobody marked waiting
+                // yet: mark it, then wait.
+                Err(thread) if thread & WAITING_BIT == 0 => {
+                    let _ = self.inner.compare_exchange_weak(
+                        thread,
+                        thread | WAITING_BIT,
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
                     continue;
                 }
                 // CAS failed because some other thread owned the lock. We must now wait.
@@ -130,6 +144,7 @@ impl RlctMutex {
                     {
                         return Err(Errno(ETIMEDOUT));
                     }
+                    waited = WAITING_BIT;
                 }
             }
         }
@@ -208,13 +223,11 @@ impl RlctMutex {
             }
         }
 
-        self.inner.store(STATE_UNLOCKED, Ordering::Release);
-        crate::sync::futex_wake(&self.inner, i32::MAX);
-        /*let was_waiting = self.inner.swap(STATE_UNLOCKED, Ordering::Release) & WAITING_BIT != 0;
-
-        if was_waiting {
-            let _ = crate::sync::futex_wake(&self.inner, 1);
-        }*/
+        // One waiter at a time: it takes the lock with WAITING_BIT, so the
+        // next unlock wakes the next one.
+        if self.inner.swap(STATE_UNLOCKED, Ordering::Release) & WAITING_BIT != 0 {
+            crate::sync::futex_wake(&self.inner, 1);
+        }
 
         Ok(())
     }
