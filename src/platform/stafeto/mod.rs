@@ -73,7 +73,12 @@ unsafe extern "C" {
     fn stafeto_thread_leaving();
     /// relibc gave up thread `id` (joined, or detached and ended): its TCB
     /// and stack may go once the kernel told of its end.
-    fn stafeto_thread_release(id: c_int);
+    fn stafeto_thread_release(id: c_int);    /// Asks thread `id` to cancel (deferred: at its next point).
+    fn stafeto_cancel(id: c_int) -> c_int;
+    /// Whether the calling thread's point acts on a request: 1 or 0.
+    fn stafeto_testcancel() -> c_int;
+    fn stafeto_setcancelstate(state: c_int, old: *mut c_int) -> c_int;
+    fn stafeto_setcanceltype(kind: c_int, old: *mut c_int) -> c_int;
 }
 
 /// The version of the interface of the `stafeto_*` functions.
@@ -144,6 +149,26 @@ pub(crate) fn thread_leaving() {
 /// relibc gave up the thread `os_tid` (`dealloc_thread`).
 pub(crate) fn thread_release(os_tid: crate::pthread::OsTid) {
     unsafe { stafeto_thread_release(os_tid.thread_id as c_int) }
+}
+
+/// Asks thread `os_tid` to cancel at its next cancellation point.
+pub(crate) fn cancel(os_tid: crate::pthread::OsTid) -> Result<()> {
+    ret(unsafe { stafeto_cancel(os_tid.thread_id as c_int) } as isize).map(|_| ())
+}
+
+/// Whether the calling thread's cancellation point acts now.
+pub(crate) fn testcancel() -> bool {
+    (unsafe { stafeto_testcancel() }) != 0
+}
+
+pub(crate) fn set_cancel_state(state: c_int) -> Result<c_int> {
+    let mut old = 0;
+    ret(unsafe { stafeto_setcancelstate(state, &raw mut old) } as isize).map(|_| old)
+}
+
+pub(crate) fn set_cancel_type(kind: c_int) -> Result<c_int> {
+    let mut old = 0;
+    ret(unsafe { stafeto_setcanceltype(kind, &raw mut old) } as isize).map(|_| old)
 }
 
 /// The stafeto implementation of [`Pal`].
