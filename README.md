@@ -1,3 +1,16 @@
+# The `stafeto` branch
+
+This branch is relibc for [stafeto](https://github.com/stafeto/stafeto), an operating system on its own microkernel. It adds a platform module, `src/platform/stafeto`, built with `--cfg stafeto` for `aarch64-unknown-linux-gnu`: it keeps Linux's C ABI (its headers and numbers) and calls stafeto's POSIX layer through `stafeto_*` functions instead of system calls. The other platforms are untouched.
+
+- **Build.** stafeto's `tools/build-relibc.py` builds `libc.a` and the headers from a pinned commit of this branch. The dependencies are in `vendor/` (and the openlibm and dlmalloc-rs submodules are folded in), so the build runs with `--frozen --offline`.
+- **Pins.** Each commit stafeto pins carries a tag `pin-<first 8 hex digits of the hash>`; older tags stay, so every pinned build can be repeated.
+- **Patches** (each commit has one topic), on top of upstream `5f317a4`:
+  - the stafeto platform: the module, start (`stafeto_init`), the TCB, threads and waits by address, signals, files, directories, time and process;
+  - POSIX fixes found on stafeto: mutexes (one waiter woken on unlock, error-checking errors, timed locks), `pthread_once`, cancellation, detached threads, `sigwait`, `sem_wait`, `readv`/`writev`;
+  - ABI fixes for AArch64 Linux: open flags and `stat`, `ucontext`/`mcontext`, the room of `sigjmp_buf`;
+  - the build: vendored dependencies and folded submodules.
+- **Licence.** MIT, as upstream (`LICENSE`, unchanged).
+
 # Redox C Library (relibc)
 
 relibc is a portable C standard library written in Rust and is under heavy development, this library contains the following items:
