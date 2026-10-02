@@ -37,8 +37,26 @@ impl Master {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(stafeto)))]
 pub type OsSpecific = ();
+
+/// The thread block of the stafeto POSIX layer: relibc zeroes it with the
+/// TCB and frees it with the TCB, and only the layer reads or writes it
+/// (its signal mask and pending signals, cancellation, the thread's
+/// channel and timer, its node in the table of waits by address).
+#[cfg(stafeto)]
+#[derive(Debug, Default)]
+#[repr(C, align(16))]
+pub struct OsSpecific(pub UnsafeCell<[u64; 24]>);
+
+// The layer finds the block at a fixed place: 32 bytes into the TCB, 192
+// bytes long. The stafeto platform checks the layer's view at start.
+#[cfg(stafeto)]
+const _: () = {
+    assert!(mem::size_of::<OsSpecific>() == 192);
+    assert!(mem::align_of::<OsSpecific>() == 16);
+    assert!(mem::offset_of!(GenericTcb<OsSpecific>, os_specific) == 32);
+};
 
 #[cfg(target_os = "redox")]
 pub type OsSpecific = redox_rt::signal::RtSigarea;
@@ -351,7 +369,7 @@ impl Tcb {
     }
 
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    unsafe fn os_arch_activate(_os: &(), tls_end: usize, tls_len: usize) {
+    unsafe fn os_arch_activate(_os: &OsSpecific, tls_end: usize, tls_len: usize) {
         // Uses ABI page
         let abi_ptr = tls_end - tls_len - 16;
         unsafe {
