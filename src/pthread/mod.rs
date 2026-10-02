@@ -445,7 +445,10 @@ pub fn set_cancel_state(state: c_int) -> Result<c_int, Errno> {
 pub fn set_cancel_type(ty: c_int) -> Result<c_int, Errno> {
     #[cfg(stafeto)]
     return crate::platform::sys::set_cancel_type(ty);
-    #[expect(unused_variables, reason = "function not yet fully implemented")]
+    #[cfg_attr(
+        not(stafeto),
+        expect(unused_variables, reason = "function not yet fully implemented")
+    )]
     let this_thread = current_thread().expect("current thread not present");
 
     // TODO
