@@ -74,11 +74,20 @@ impl Semaphore {
                     CLOCK_REALTIME => timespec_realtime_to_monotonic(timeout)?,
                     _ => return Err(Errno(errno::EINVAL)),
                 };
-                unsafe { Sys::futex_wait(self.count.ptr(), 0, Some(&relative))? };
+                Self::waited(unsafe { Sys::futex_wait(self.count.ptr(), 0, Some(&relative)) })?;
             } else {
                 // Use futex to wait for the next change, without a timeout
-                unsafe { Sys::futex_wait(self.count.ptr(), 0, None)? };
+                Self::waited(unsafe { Sys::futex_wait(self.count.ptr(), 0, None) })?;
             }
+        }
+    }
+    /// What a wait by address says for the semaphore: a changed count
+    /// (EAGAIN) or an interruption (EINTR) means look again; only the
+    /// deadline (ETIMEDOUT) and real errors end the wait.
+    fn waited(result: Result<()>) -> Result<()> {
+        match result {
+            Err(Errno(errno::EAGAIN | errno::EINTR)) => Ok(()),
+            other => other,
         }
     }
     pub fn value(&self) -> c_uint {
