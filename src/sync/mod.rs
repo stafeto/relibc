@@ -27,7 +27,6 @@ use crate::{
     platform::{Pal, Sys, types::c_int},
 };
 use core::{
-    hint,
     mem::MaybeUninit,
     ops::Deref,
     ptr,
@@ -153,9 +152,12 @@ where
     F1: Fn(&AtomicInt) -> AttemptStatus,
     F2: Fn(&AtomicInt) -> AttemptStatus,
 {
-    // First, try spinning for really short durations
+    // First, try spinning for really short durations. On stafeto, which
+    // runs on one processor, the holder cannot make progress while this
+    // thread spins: wait at once.
+    #[cfg(not(stafeto))]
     for _ in 0..999 {
-        hint::spin_loop();
+        core::hint::spin_loop();
         if attempt(word) == AttemptStatus::Desired {
             return;
         }
