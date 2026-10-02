@@ -15,6 +15,7 @@
 sys_includes = ["features.h"]
 include_guard = "_RELIBC_SIGNAL_H"
 after_includes = """
+#define __relibc_aligned(n) __attribute__((aligned(n)))
 #include <bits/size-t.h>        // for size_t from sys/types.h
 #include <bits/pid-t.h>         // for pid_t from sys/types.h
 #include <bits/uid-t.h>         // for uid_t from sys/types.h
@@ -61,6 +62,10 @@ trailer = """
 #define si_addr _sifields.__sigfault.si_addr
 #endif
 """
+
+# The AArch64 mcontext_t is aligned to 16 (asm/sigcontext.h).
+[layout]
+aligned_n = "__relibc_aligned"
 
 [enum]
 prefix_with_name = true
