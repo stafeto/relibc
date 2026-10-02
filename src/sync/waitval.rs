@@ -39,4 +39,17 @@ impl<T> Waitval<T> {
 
         unsafe { (*self.value.get()).assume_init_ref() }
     }
+
+    /// `wait` as a cancellation point (pthread_join): a request acts before
+    /// the wait and when it wakes the wait (stafeto's cancellation sends
+    /// the waiting thread a wake).
+    #[cfg(stafeto)]
+    pub fn wait_cancellable(&self) -> &T {
+        while self.state.load(Ordering::Acquire) == 0 {
+            unsafe { crate::pthread::testcancel() };
+            crate::sync::futex_wait(&self.state, 0, None);
+        }
+
+        unsafe { (*self.value.get()).assume_init_ref() }
+    }
 }
