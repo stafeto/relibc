@@ -114,10 +114,15 @@ unsafe extern "C" {
     /// posix_spawn of the program at `path` with the spawn-flags
     /// `flags` and the process group `pgroup`: the child's PID.
     fn stafeto_spawn(path: *const c_char, flags: c_int, pgroup: pid_t) -> pid_t;
+    /// waitpid: the child's PID (0 for WNOHANG with none), its status in
+    /// `status`.
+    fn stafeto_waitpid(pid: pid_t, status: *mut c_int, options: c_int) -> pid_t;
+    /// waitid: 0, with the Linux siginfo of the child at `info`.
+    fn stafeto_waitid(idtype: c_int, id: id_t, info: *mut c_void, options: c_int) -> c_int;
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 5;
+const PLATFORM_INTERFACE: u64 = 6;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -717,7 +722,24 @@ impl Pal for Sys {
     }
 
     fn waitpid(pid: pid_t, stat_loc: Option<Out<c_int>>, options: c_int) -> Result<pid_t> {
-        Err(Errno(ENOSYS))
+        let mut status = 0;
+        let pid = ret(unsafe { stafeto_waitpid(pid, &raw mut status, options) } as isize)?;
+        if let Some(mut out) = stat_loc {
+            out.write(status);
+        }
+        Ok(pid as pid_t)
+    }
+
+    fn waitid(
+        idtype: crate::header::sys_wait::idtype_t,
+        id: id_t,
+        infop: *mut crate::header::signal::siginfo_t,
+        options: c_int,
+    ) -> Result<()> {
+        if infop.is_null() {
+            return Err(Errno(EINVAL));
+        }
+        ret(unsafe { stafeto_waitid(idtype, id, infop.cast(), options) } as isize).map(|_| ())
     }
 
     fn write(fildes: c_int, buf: &[u8]) -> Result<usize> {
