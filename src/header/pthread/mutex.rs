@@ -210,6 +210,15 @@ pub unsafe extern "C" fn pthread_mutexattr_settype(
     attr: *mut pthread_mutexattr_t,
     ty: c_int,
 ) -> c_int {
+    if !matches!(
+        ty,
+        PTHREAD_MUTEX_DEFAULT
+            | PTHREAD_MUTEX_ERRORCHECK
+            | PTHREAD_MUTEX_NORMAL
+            | PTHREAD_MUTEX_RECURSIVE
+    ) {
+        return crate::header::errno::EINVAL;
+    }
     unsafe { &mut *attr.cast::<RlctMutexAttr>() }.ty = ty;
     0
 }
