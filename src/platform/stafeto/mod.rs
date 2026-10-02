@@ -119,6 +119,8 @@ unsafe extern "C" {
         argv: *const *const c_char,
         envp: *const *const c_char,
         attributes: *const SpawnAttributes,
+        actions: *const SpawnAction,
+        count: usize,
     ) -> pid_t;
     /// waitpid: the child's PID (0 for WNOHANG with none), its status in
     /// `status`.
@@ -144,8 +146,21 @@ struct SpawnAttributes {
     default: u64,
 }
 
+/// A file action of posix_spawn as the layer takes it: OPEN (1) of `path`
+/// with `flags` at `fd`, CLOSE (2), DUP2 (3) of `fd` to `newfd`, CHDIR (4)
+/// to `path`, FCHDIR (5) to `fd`.
+#[repr(C)]
+struct SpawnAction {
+    kind: c_int,
+    fd: c_int,
+    newfd: c_int,
+    flags: c_int,
+    mode: u32,
+    path: *const c_char,
+}
+
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 8;
+const PLATFORM_INTERFACE: u64 = 9;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -802,8 +817,9 @@ impl Pal for Sys {
     }
 
     /// The layer's loader starts the program in the file at `program`
-    /// with `argv`, `envp` and the attributes (stafeto 5c); file actions
-    /// are EINVAL until the layer takes them.
+    /// with `argv`, `envp`, the attributes and the file actions, which
+    /// the layer applies to a copy of the caller's descriptors (stafeto
+    /// 5c).
     unsafe fn spawn(
         program: CStr,
         fac: Option<&crate::header::spawn::posix_spawn_file_actions_t>,
@@ -811,9 +827,36 @@ impl Pal for Sys {
         mut argv: crate::iter::NulTerminated<*mut c_char>,
         envp: Option<crate::iter::NulTerminated<*mut c_char>>,
     ) -> Result<pid_t> {
-        if fac.is_some_and(|actions| actions.into_iter().next().is_some()) {
-            return Err(Errno(EINVAL));
-        }
+        use crate::header::spawn::Action;
+        // The actions own their paths, which the layer reads through the
+        // list built from them.
+        let owned: alloc::vec::Vec<Action> =
+            fac.map_or(alloc::vec::Vec::new(), |actions| actions.into_iter().collect());
+        let file_actions: alloc::vec::Vec<SpawnAction> = owned
+            .iter()
+            .map(|action| {
+                let (kind, fd, newfd, flags, mode, path) = match action {
+                    Action::Open {
+                        fd,
+                        path,
+                        flag,
+                        mode,
+                    } => (1, *fd, 0, *flag, *mode as u32, path.as_ptr()),
+                    Action::Close(fd) => (2, *fd, 0, 0, 0, core::ptr::null()),
+                    Action::Dup2(fd, newfd) => (3, *fd, *newfd, 0, 0, core::ptr::null()),
+                    Action::Chdir(path) => (4, 0, 0, 0, 0, path.as_ptr()),
+                    Action::FChdir(fd) => (5, *fd, 0, 0, 0, core::ptr::null()),
+                };
+                SpawnAction {
+                    kind,
+                    fd,
+                    newfd,
+                    flags,
+                    mode,
+                    path,
+                }
+            })
+            .collect();
         static NONE: [usize; 1] = [0];
         let none = NONE.as_ptr().cast::<*const c_char>();
         // The first element's place is the array's: each list is NULL-ended.
@@ -831,7 +874,16 @@ impl Pal for Sys {
         let attributes = attributes
             .as_ref()
             .map_or(core::ptr::null(), |a| a as *const SpawnAttributes);
-        ret(unsafe { stafeto_spawn(program.as_ptr(), argv, envp, attributes) } as isize)
-            .map(|v| v as pid_t)
+        ret(unsafe {
+            stafeto_spawn(
+                program.as_ptr(),
+                argv,
+                envp,
+                attributes,
+                file_actions.as_ptr(),
+                file_actions.len(),
+            )
+        } as isize)
+        .map(|v| v as pid_t)
     }
 }
