@@ -2,7 +2,7 @@
 //!
 //! See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/stdlib.h.html>.
 
-use core::{convert::TryFrom, intrinsics, iter, mem, ptr, slice};
+use core::{convert::TryFrom, iter, mem, ptr, slice};
 use rand::{
     RngExt, SeedableRng,
     distr::{Alphanumeric, Distribution, Uniform},
@@ -119,7 +119,17 @@ pub unsafe extern "C" fn a64l(s: *const c_char) -> c_long {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn abort() -> ! {
     log::error!("Abort");
-    intrinsics::abort();
+    // stafeto: SIGABRT through the platform runs a handler or ends the
+    // process with status 134; when a handler returns, the process ends
+    // with that status all the same.
+    #[cfg(stafeto)]
+    {
+        use crate::platform::{Pal, PalSignal, Sys};
+        let _ = Sys::raise(crate::header::signal::SIGABRT as c_int);
+        Sys::exit(134);
+    }
+    #[cfg(not(stafeto))]
+    core::intrinsics::abort();
 }
 
 #[cfg(not(target_pointer_width = "64"))]
