@@ -81,6 +81,26 @@ unsafe extern "C" {
     /// relibc gave up thread `id` (joined, or detached and ended): its TCB
     /// and stack may go once the kernel told of its end.
     fn stafeto_thread_release(id: c_int);
+    fn stafeto_ioctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int;
+    fn stafeto_chdir(path: *const c_char) -> c_int;
+    fn stafeto_clock_settime(clock: clockid_t, time: *const timespec) -> c_int;
+    fn stafeto_dup(fd: c_int) -> c_int;
+    fn stafeto_dup2(fd: c_int, target: c_int) -> c_int;
+    /// fstat (path null), stat and lstat in Linux's struct stat.
+    fn stafeto_fstatat(fd: c_int, path: *const c_char, out: *mut stat, flags: c_int) -> c_int;
+    fn stafeto_fcntl(fd: c_int, command: c_int, argument: c_ulonglong) -> c_int;
+    fn stafeto_getcwd(buf: *mut u8, len: usize) -> c_int;
+    /// Linux dirent64 records of the directory `fd` from position `off`.
+    fn stafeto_getdents(fd: c_int, buf: *mut u8, len: usize, off: u64) -> isize;
+    fn stafeto_getuid() -> uid_t;
+    fn stafeto_geteuid() -> uid_t;
+    fn stafeto_getgid() -> gid_t;
+    fn stafeto_getegid() -> gid_t;
+    fn stafeto_getrlimit(resource: c_int, out: *mut rlimit) -> c_int;
+    fn stafeto_pread(fd: c_int, buf: *mut u8, len: usize, off: off_t) -> isize;
+    fn stafeto_pwrite(fd: c_int, buf: *const u8, len: usize, off: off_t) -> isize;
+    fn stafeto_umask(mask: mode_t) -> mode_t;
+    fn stafeto_uname(out: *mut utsname) -> c_int;
     /// Asks thread `id` to cancel (deferred: at its next point).
     fn stafeto_cancel(id: c_int) -> c_int;
     /// Whether the calling thread's point acts on a request: 1 or 0.
@@ -90,7 +110,7 @@ unsafe extern "C" {
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 2;
+const PLATFORM_INTERFACE: u64 = 3;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -195,7 +215,7 @@ pub struct Sys;
 
 impl Sys {
     pub unsafe fn ioctl(fd: c_int, request: c_ulong, out: *mut c_void) -> Result<c_int> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_ioctl(fd, request, out) } as isize).map(|v| v as c_int)
     }
 }
 
@@ -205,11 +225,12 @@ impl Pal for Sys {
     }
 
     unsafe fn brk(addr: *mut c_void) -> Result<*mut c_void> {
-        Err(Errno(ENOSYS))
+        // The heap is the layer's: dlmalloc takes its memory by mmap.
+        Err(Errno(crate::header::errno::ENOMEM))
     }
 
     fn chdir(path: CStr) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_chdir(path.as_ptr()) } as isize).map(|_| ())
     }
 
     fn fchownat(fildes: c_int, path: CStr, owner: uid_t, group: gid_t, flags: c_int) -> Result<()> {
@@ -228,7 +249,7 @@ impl Pal for Sys {
     }
 
     unsafe fn clock_settime(clk_id: clockid_t, tp: *const timespec) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_clock_settime(clk_id, tp) } as isize).map(|_| ())
     }
 
     fn close(fildes: c_int) -> Result<()> {
@@ -236,11 +257,11 @@ impl Pal for Sys {
     }
 
     fn dup(fildes: c_int) -> Result<c_int> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_dup(fildes) } as isize).map(|v| v as c_int)
     }
 
     fn dup2(fildes: c_int, fildes2: c_int) -> Result<c_int> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_dup2(fildes, fildes2) } as isize).map(|v| v as c_int)
     }
 
     unsafe fn execve(path: CStr, argv: *const *mut c_char, envp: *const *mut c_char) -> Result<()> {
@@ -282,7 +303,8 @@ impl Pal for Sys {
     }
 
     fn fstatat(fildes: c_int, path: Option<CStr>, mut buf: Out<stat>, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        let path = path.map_or(ptr::null(), |path| path.as_ptr());
+        ret(unsafe { stafeto_fstatat(fildes, path, buf.as_mut_ptr(), flags) } as isize).map(|_| ())
     }
 
     fn fstatvfs(fildes: c_int, buf: Out<statvfs>) -> Result<()> {
@@ -290,7 +312,7 @@ impl Pal for Sys {
     }
 
     fn fcntl(fildes: c_int, cmd: c_int, arg: c_ulonglong) -> Result<c_int> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_fcntl(fildes, cmd, arg) } as isize).map(|v| v as c_int)
     }
 
     unsafe fn fork() -> Result<pid_t> {
@@ -337,31 +359,40 @@ impl Pal for Sys {
         Err(Errno(ENOSYS))
     }
 
-    fn getcwd(buf: Out<[u8]>) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn getcwd(mut buf: Out<[u8]>) -> Result<()> {
+        let len = buf.len();
+        let pointer = buf.as_mut_ptr().cast::<u8>();
+        ret(unsafe { stafeto_getcwd(pointer, len) } as isize).map(|_| ())
     }
 
-    fn getdents(fd: c_int, buf: &mut [u8], _off: u64) -> Result<usize> {
-        Err(Errno(ENOSYS))
+    fn getdents(fd: c_int, buf: &mut [u8], off: u64) -> Result<usize> {
+        // Stateless: `off` is the position after the last entry relibc
+        // took (its d_off), a position of the directory's descriptor.
+        ret(unsafe { stafeto_getdents(fd, buf.as_mut_ptr(), buf.len(), off) }).map(|v| v as usize)
     }
     fn dir_seek(fd: c_int, off: u64) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_lseek(fd, off as off_t, SEEK_SET) } as isize).map(|_| ())
     }
     // FIXME use offset or remove it
     unsafe fn dent_reclen_offset(this_dent: &[u8], _offset: usize) -> Option<(u16, u64)> {
-        None
+        // Linux's struct dirent64, as the layer writes it.
+        let dent = this_dent.as_ptr().cast::<dirent>();
+        Some((
+            unsafe { (*dent).d_reclen },
+            unsafe { (*dent).d_off }.cast_unsigned(),
+        ))
     }
 
     fn getegid() -> gid_t {
-        0
+        unsafe { stafeto_getegid() }
     }
 
     fn geteuid() -> uid_t {
-        0
+        unsafe { stafeto_geteuid() }
     }
 
     fn getgid() -> gid_t {
-        0
+        unsafe { stafeto_getgid() }
     }
 
     fn getgroups(list: Out<[gid_t]>) -> Result<c_int> {
@@ -392,8 +423,8 @@ impl Pal for Sys {
         Err(Errno(ENOSYS))
     }
 
-    fn getrlimit(resource: c_int, rlim: Out<rlimit>) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn getrlimit(resource: c_int, mut rlim: Out<rlimit>) -> Result<()> {
+        ret(unsafe { stafeto_getrlimit(resource, rlim.as_mut_ptr()) } as isize).map(|_| ())
     }
 
     fn getresgid(
@@ -432,7 +463,7 @@ impl Pal for Sys {
     }
 
     fn getuid() -> uid_t {
-        0
+        unsafe { stafeto_getuid() }
     }
 
     fn linkat(fd1: c_int, path1: CStr, fd2: c_int, path2: CStr, flags: c_int) -> Result<()> {
@@ -471,6 +502,9 @@ impl Pal for Sys {
         fildes: c_int,
         off: off_t,
     ) -> Result<*mut c_void> {
+        if len == 0 {
+            return Err(Errno(EINVAL));
+        }
         // Anonymous private memory only, from the layer's heap.
         if fildes != -1 || flags & crate::header::sys_mman::MAP_ANONYMOUS == 0 || !addr.is_null() {
             return Err(Errno(ENOSYS));
@@ -564,11 +598,21 @@ impl Pal for Sys {
         ret(unsafe { stafeto_read(fildes, buf.as_mut_ptr(), buf.len()) }).map(|v| v as usize)
     }
     fn pread(fildes: c_int, buf: &mut [u8], off: off_t) -> Result<usize> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_pread(fildes, buf.as_mut_ptr(), buf.len(), off) }).map(|v| v as usize)
     }
 
     unsafe fn readv(fildes: c_int, iov: *const iovec, iovcnt: c_int) -> Result<usize> {
-        Err(Errno(ENOSYS))
+        // Each part in turn; a short read ends the call.
+        let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt.max(0) as usize) };
+        let mut total = 0;
+        for part in parts {
+            let got = ret(unsafe { stafeto_read(fildes, part.iov_base.cast(), part.iov_len) })?;
+            total += got as usize;
+            if (got as usize) < part.iov_len {
+                break;
+            }
+        }
+        Ok(total)
     }
 
     fn readlinkat(dirfd: c_int, pathname: CStr, out: &mut [u8]) -> Result<usize> {
@@ -643,11 +687,11 @@ impl Pal for Sys {
     }
 
     fn umask(mask: mode_t) -> mode_t {
-        0o022
+        unsafe { stafeto_umask(mask) }
     }
 
-    fn uname(utsname: Out<utsname>) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn uname(mut utsname: Out<utsname>) -> Result<()> {
+        ret(unsafe { stafeto_uname(utsname.as_mut_ptr()) } as isize).map(|_| ())
     }
 
     fn unlinkat(fd: c_int, path: CStr, flags: c_int) -> Result<()> {
@@ -662,11 +706,21 @@ impl Pal for Sys {
         ret(unsafe { stafeto_write(fildes, buf.as_ptr(), buf.len()) }).map(|v| v as usize)
     }
     fn pwrite(fildes: c_int, buf: &[u8], off: off_t) -> Result<usize> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_pwrite(fildes, buf.as_ptr(), buf.len(), off) }).map(|v| v as usize)
     }
 
     unsafe fn writev(fildes: c_int, iov: *const iovec, iovcnt: c_int) -> Result<usize> {
-        Err(Errno(ENOSYS))
+        // Each part in turn; a short write ends the call.
+        let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt.max(0) as usize) };
+        let mut total = 0;
+        for part in parts {
+            let wrote = ret(unsafe { stafeto_write(fildes, part.iov_base.cast(), part.iov_len) })?;
+            total += wrote as usize;
+            if (wrote as usize) < part.iov_len {
+                break;
+            }
+        }
+        Ok(total)
     }
 
     fn verify() -> bool {
