@@ -76,6 +76,7 @@ pub const UTIME_NOW: c_long = (1 << 30) - 1;
 pub const UTIME_OMIT: c_long = (1 << 30) - 2;
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sys_stat.h.html>.
+#[cfg(not(all(target_os = "linux", target_arch = "aarch64")))]
 #[repr(C)]
 #[derive(Default)]
 pub struct stat {
@@ -117,6 +118,72 @@ pub struct stat {
     // This works.
     pub _pad: [c_char; 24],
 }
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sys_stat.h.html>.
+///
+/// AArch64 Linux has the generic layout (asm-generic/stat.h), 128 bytes:
+/// the mode before a 32-bit link count, padding after the device of a
+/// special file and after a 32-bit block size.
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+#[repr(C)]
+#[derive(Default)]
+pub struct stat {
+    /// Device ID of device containing file.
+    pub st_dev: dev_t,
+    /// File serial number.
+    pub st_ino: ino_t,
+    /// Mode of file.
+    pub st_mode: mode_t,
+    /// Number of hard links to the file.
+    pub st_nlink: nlink_t,
+    /// User ID of file.
+    pub st_uid: uid_t,
+    /// Group ID of file.
+    pub st_gid: gid_t,
+    /// Device ID (if file is character or block special).
+    pub st_rdev: dev_t,
+    pub __pad1: dev_t,
+    /// For regular files, the file size in bytes.
+    pub st_size: off_t,
+    /// A file system-specific preferred I/O block size for this object.
+    pub st_blksize: blksize_t,
+    pub __pad2: c_int,
+    /// Number of blocks allocated for this object.
+    pub st_blocks: blkcnt_t,
+    /// Last data access timestamp.
+    pub st_atim: timespec,
+    /// Last data modification timestamp.
+    pub st_mtim: timespec,
+    /// Last file status change timestamp.
+    pub st_ctim: timespec,
+    pub __unused: [c_int; 2],
+}
+
+// The layout the kernel writes: that of the libc crate for this target.
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "aarch64",
+    feature = "check_against_libc_crate"
+))]
+const _: () = {
+    use __libc_only_for_layout_checks as libc;
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<stat>() == 128 && size_of::<libc::stat>() == 128);
+    assert!(offset_of!(stat, st_ino) == offset_of!(libc::stat, st_ino));
+    assert!(offset_of!(stat, st_mode) == offset_of!(libc::stat, st_mode));
+    assert!(offset_of!(stat, st_nlink) == offset_of!(libc::stat, st_nlink));
+    assert!(offset_of!(stat, st_uid) == offset_of!(libc::stat, st_uid));
+    assert!(offset_of!(stat, st_gid) == offset_of!(libc::stat, st_gid));
+    assert!(offset_of!(stat, st_rdev) == offset_of!(libc::stat, st_rdev));
+    assert!(offset_of!(stat, st_size) == offset_of!(libc::stat, st_size));
+    assert!(offset_of!(stat, st_blksize) == offset_of!(libc::stat, st_blksize));
+    assert!(offset_of!(stat, st_blocks) == offset_of!(libc::stat, st_blocks));
+    assert!(offset_of!(stat, st_atim) == offset_of!(libc::stat, st_atime));
+    assert!(offset_of!(stat, st_mtim) == offset_of!(libc::stat, st_mtime));
+    assert!(offset_of!(stat, st_ctim) == offset_of!(libc::stat, st_ctime));
+    assert!(size_of::<nlink_t>() == size_of::<libc::nlink_t>());
+    assert!(size_of::<blksize_t>() == size_of::<libc::blksize_t>());
+};
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/chmod.html>.
 #[unsafe(no_mangle)]
