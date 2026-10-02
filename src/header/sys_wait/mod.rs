@@ -5,9 +5,10 @@
 use crate::{
     error::ResultExt,
     out::Out,
+    header::signal::siginfo_t,
     platform::{
         Pal, Sys,
-        types::{c_int, pid_t},
+        types::{c_int, id_t, pid_t},
     },
 };
 
@@ -54,19 +55,34 @@ pub unsafe extern "C" fn wait(stat_loc: *mut c_int) -> pid_t {
     unsafe { waitpid(!0, stat_loc, 0) }
 }
 
-/*
- * TODO: implement idtype_t, id_t, and siginfo_t
- *
- * #[unsafe(no_mangle)]
- * pub unsafe extern "C" fn waitid(
- *     idtype: idtype_t,
- *     id: id_t,
- *     infop: siginfo_t,
- *     options: c_int
- *  ) -> c_int {
- *      unimplemented!();
- *  }
- */
+/// The kind of the `id` of [`waitid()`]: any child, the child of a process
+/// ID, or the children of a process group ID.
+pub type idtype_t = c_int;
+/// Any child, `id` ignored.
+pub const P_ALL: idtype_t = 0;
+/// The child whose process ID is `id`.
+pub const P_PID: idtype_t = 1;
+/// The children whose process group ID is `id`.
+pub const P_PGID: idtype_t = 2;
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/waitid.html>.
+///
+/// Waits for a change of the state of a child that `idtype` and `id`
+/// name, as `options` say, and describes it in `infop`.
+///
+/// Returns `0`, with `si_pid` 0 in `infop` for `WNOHANG` when no child
+/// changed state; on failure returns `-1` and sets errno.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn waitid(
+    idtype: idtype_t,
+    id: id_t,
+    infop: *mut siginfo_t,
+    options: c_int,
+) -> c_int {
+    Sys::waitid(idtype, id, infop, options)
+        .map(|()| 0)
+        .or_minus_one_errno()
+}
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/waitpid.html>.
 ///

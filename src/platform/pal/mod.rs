@@ -492,6 +492,16 @@ pub trait Pal {
     /// Platform implementation of [`waitpid()`](crate::header::sys_wait::waitpid) from [`sys/wait.h`](crate::header::sys_wait).
     fn waitpid(pid: pid_t, stat_loc: Option<Out<c_int>>, options: c_int) -> Result<pid_t>;
 
+    /// Platform implementation of [`waitid()`](crate::header::sys_wait::waitid) from [`sys/wait.h`](crate::header::sys_wait): ENOSYS where the platform has none.
+    fn waitid(
+        _idtype: crate::header::sys_wait::idtype_t,
+        _id: crate::platform::types::id_t,
+        _infop: *mut crate::header::signal::siginfo_t,
+        _options: c_int,
+    ) -> Result<()> {
+        Err(crate::error::Errno(crate::header::errno::ENOSYS))
+    }
+
     /// Platform implementation of [`write()`](crate::header::unistd::write) from [`unistd.h`](crate::header::unistd).
     fn write(fildes: c_int, buf: &[u8]) -> Result<usize>;
 
