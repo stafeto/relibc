@@ -3,8 +3,8 @@
 #![warn(warnings, unused_variables)]
 
 use super::*;
+use crate::error::Errno;
 pub use crate::sync::pthread_mutex::RlctMutex;
-use crate::{error::Errno, header::time::timespec_realtime_to_monotonic};
 
 // PTHREAD_MUTEX_INITIALIZER is defined in bits_pthread/cbindgen.toml
 
@@ -83,12 +83,7 @@ pub unsafe extern "C" fn pthread_mutex_timedlock(
     mutex: *mut pthread_mutex_t,
     abstime: &timespec,
 ) -> c_int {
-    let relative = match timespec_realtime_to_monotonic(abstime) {
-        Ok(relative) => relative,
-        Err(err) => return e(Err(err)),
-    };
-
-    e((unsafe { &*mutex.cast::<RlctMutex>() }).lock_with_timeout(&relative))
+    e((unsafe { &*mutex.cast::<RlctMutex>() }).lock_with_timeout(abstime))
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_mutex_trylock.html>.
