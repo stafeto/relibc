@@ -27,10 +27,11 @@ use crate::{
         time::{itimerspec, timespec},
         unistd::{SEEK_CUR, SEEK_SET},
     },
-    ld_so::tcb::OsSpecific,
+    ld_so::tcb::{OsSpecific, Tcb},
     out::Out,
 };
-use core::{num::NonZeroU64, ptr};
+use core::{fmt::Write, mem, num::NonZeroU64, ptr};
+use generic_rt::GenericTcb;
 
 unsafe extern "C" {
     fn stafeto_write(fd: c_int, buf: *const u8, len: usize) -> isize;
@@ -45,6 +46,44 @@ unsafe extern "C" {
     fn stafeto_munmap(addr: *mut c_void, len: usize) -> c_int;
     fn stafeto_getpid() -> pid_t;
     fn stafeto_getppid() -> pid_t;
+    /// The layer's ABI word (`PLATFORM_ABI`).
+    static STAFETO_PLATFORM_ABI: u64;
+    /// Attaches the calling thread, whose TCB is `tcb`, to the layer: its
+    /// block in the TCB, its channel, timer and entry of signals.
+    fn stafeto_init(tcb: *mut c_void) -> c_int;
+}
+
+/// The version of the interface of the `stafeto_*` functions.
+const PLATFORM_INTERFACE: u64 = 1;
+
+/// The ABI word relibc and the layer must agree on: the size of the
+/// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
+/// the interface in bits 32 to 63.
+const PLATFORM_ABI: u64 = mem::size_of::<OsSpecific>() as u64
+    | (mem::offset_of!(GenericTcb<OsSpecific>, os_specific) as u64) << 16
+    | PLATFORM_INTERFACE << 32;
+
+/// The platform's part of the start of a process, once its TCB exists:
+/// checks the layer's ABI word and attaches the main thread. A process
+/// whose layer does not match says why on fd 2 and ends with status 127.
+pub(crate) unsafe fn init() {
+    // SAFETY: the layer defines the word and never writes it.
+    let layer = unsafe { ptr::read_volatile(&raw const STAFETO_PLATFORM_ABI) };
+    if layer != PLATFORM_ABI {
+        let _ = writeln!(
+            super::FileWriter::new(2),
+            "relibc: stafeto platform ABI {layer:#x}, relibc expects {PLATFORM_ABI:#x}"
+        );
+        Sys::exit(127);
+    }
+    let tcb = unsafe { Tcb::current() }.map_or(ptr::null_mut(), |tcb| ptr::from_mut(tcb).cast());
+    if let Err(Errno(errno)) = ret(unsafe { stafeto_init(tcb) } as isize) {
+        let _ = writeln!(
+            super::FileWriter::new(2),
+            "relibc: the stafeto layer did not attach the main thread: errno {errno}"
+        );
+        Sys::exit(127);
+    }
 }
 
 /// The stafeto layer returns a value or a negated errno.

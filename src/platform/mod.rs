@@ -419,5 +419,10 @@ pub unsafe fn init_inner(auxvs: Box<[[usize; 2]]>) {
     }
 }
 #[expect(clippy::boxed_local)]
-#[cfg(not(target_os = "redox"))]
+#[cfg(stafeto)]
+pub unsafe fn init(_auxvs: Box<[[usize; 2]]>) {
+    unsafe { sys::init() }
+}
+#[expect(clippy::boxed_local)]
+#[cfg(not(any(target_os = "redox", stafeto)))]
 pub unsafe fn init(_auxvs: Box<[[usize; 2]]>) {}
