@@ -119,10 +119,16 @@ unsafe extern "C" {
     fn stafeto_waitpid(pid: pid_t, status: *mut c_int, options: c_int) -> pid_t;
     /// waitid: 0, with the Linux siginfo of the child at `info`.
     fn stafeto_waitid(idtype: c_int, id: id_t, info: *mut c_void, options: c_int) -> c_int;
+    /// setpgid, setsid, getpgid and getsid: the value (0 for setpgid), or
+    /// the negated errno.
+    fn stafeto_setpgid(pid: pid_t, pgid: pid_t) -> c_int;
+    fn stafeto_setsid() -> c_int;
+    fn stafeto_getpgid(pid: pid_t) -> c_int;
+    fn stafeto_getsid(pid: pid_t) -> c_int;
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 6;
+const PLATFORM_INTERFACE: u64 = 7;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -416,7 +422,7 @@ impl Pal for Sys {
     }
 
     fn getpgid(pid: pid_t) -> Result<pid_t> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_getpgid(pid) } as isize).map(|v| v as pid_t)
     }
 
     fn getpid() -> pid_t {
@@ -463,7 +469,7 @@ impl Pal for Sys {
     }
 
     fn getsid(pid: pid_t) -> Result<pid_t> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_getsid(pid) } as isize).map(|v| v as pid_t)
     }
 
     fn gettid() -> pid_t {
@@ -661,7 +667,7 @@ impl Pal for Sys {
     }
 
     fn setpgid(pid: pid_t, pgid: pid_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_setpgid(pid, pgid) } as isize).map(|_| ())
     }
 
     fn setpriority(which: c_int, who: id_t, prio: c_int) -> Result<()> {
@@ -677,7 +683,7 @@ impl Pal for Sys {
     }
 
     fn setsid() -> Result<c_int> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_setsid() } as isize).map(|v| v as c_int)
     }
 
     fn symlinkat(path1: CStr, fd: c_int, path2: CStr) -> Result<()> {
