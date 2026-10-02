@@ -4,6 +4,7 @@
 include_guard = "_RELIBC_LIMITS_H"
 after_includes = """
 #include <bits/limits/ptdi.h> // for PTHREAD_DESTRUCTOR_ITERATIONS
+#define PATH_MAX 512 // the stafeto layer's limit; PATH_MAX in mod.rs is the same
 """
 language = "C"
 no_includes = true
@@ -11,3 +12,6 @@ cpp_compat = true
 
 [enum]
 prefix_with_name = true
+
+[export]
+exclude = ["PATH_MAX"]

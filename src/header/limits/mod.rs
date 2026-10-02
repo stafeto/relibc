@@ -17,8 +17,13 @@ pub const NAME_MAX: usize = 255;
 pub const PASS_MAX: usize = 128;
 /// Maximum number of bytes the implementation stores as a pathname in a
 /// user-supplied buffer of unspecified size, including the terminating null
-/// character.
+/// character. The stafeto layer takes paths of at most 512 bytes with
+/// their terminator (`proto_fs::MAX_PATH`); limits.h defines the same value
+/// (cbindgen.toml).
+#[cfg(not(stafeto))]
 pub const PATH_MAX: usize = 4096;
+#[cfg(stafeto)]
+pub const PATH_MAX: usize = 512;
 /// Maximum number of simultaneous supplementary group IDs per process.
 pub const NGROUPS_MAX: usize = 65536;
 /// Maximum number of `iovec` structures that one process has available for
