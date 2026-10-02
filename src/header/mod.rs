@@ -172,7 +172,7 @@ pub mod sys_syscall;
 pub mod sys_time;
 #[deprecated]
 pub mod sys_timeb;
-//pub mod sys_times;
+// stafeto: times() for ash's builtin (elapsed time, no CPU accounting).
 pub mod arch_aarch64_user;
 pub mod arch_riscv64_user;
 pub mod arch_x64_user;
@@ -180,6 +180,8 @@ pub mod arch_x64_user;
 pub mod sys_procfs;
 pub mod sys_random;
 pub mod sys_syslog;
+#[cfg(stafeto)]
+pub mod sys_times;
 pub mod sys_types;
 #[allow(non_camel_case_types)]
 pub mod sys_types_extra;
