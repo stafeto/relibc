@@ -41,6 +41,7 @@ unsafe extern "C" {
     ) -> c_int;
     fn stafeto_raise(sig: c_int) -> c_int;
     fn stafeto_kill(pid: pid_t, sig: c_int) -> c_int;
+    fn stafeto_killpg(pgrp: pid_t, sig: c_int) -> c_int;
     fn stafeto_thread_kill(id: c_int, sig: c_int) -> c_int;
 }
 
@@ -71,7 +72,7 @@ impl PalSignal for Sys {
     }
 
     fn killpg(pgrp: pid_t, sig: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_killpg(pgrp, sig) }).map(|_| ())
     }
 
     fn raise(sig: c_int) -> Result<()> {
