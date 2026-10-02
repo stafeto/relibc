@@ -14,26 +14,28 @@ use crate::{
     platform::types::pid_t,
 };
 
+// The flags are distinct bits, which a caller combines with `|`
+// (posix_spawnattr_setflags); their values are those of Linux.
 bitflags::bitflags! {
     pub struct Flags: c_short
     {
-        const POSIX_SPAWN_RESETIDS = 1;
-        const POSIX_SPAWN_SETPGROUP = 2;
-        const POSIX_SPAWN_SETSIGDEF = 3;
-        const POSIX_SPAWN_SETSIGMASK = 4;
-        const POSIX_SPAWN_SETSCHEDPARAM = 5;
-        const POSIX_SPAWN_SETSCHEDULER = 6;
-        const POSIX_SPAWN_SETSID = 7;
+        const POSIX_SPAWN_RESETIDS = POSIX_SPAWN_RESETIDS;
+        const POSIX_SPAWN_SETPGROUP = POSIX_SPAWN_SETPGROUP;
+        const POSIX_SPAWN_SETSIGDEF = POSIX_SPAWN_SETSIGDEF;
+        const POSIX_SPAWN_SETSIGMASK = POSIX_SPAWN_SETSIGMASK;
+        const POSIX_SPAWN_SETSCHEDPARAM = POSIX_SPAWN_SETSCHEDPARAM;
+        const POSIX_SPAWN_SETSCHEDULER = POSIX_SPAWN_SETSCHEDULER;
+        const POSIX_SPAWN_SETSID = POSIX_SPAWN_SETSID;
     }
 }
 
-pub const POSIX_SPAWN_RESETIDS: c_short = 1;
-pub const POSIX_SPAWN_SETPGROUP: c_short = 2;
-pub const POSIX_SPAWN_SETSIGDEF: c_short = 3;
-pub const POSIX_SPAWN_SETSIGMASK: c_short = 4;
-pub const POSIX_SPAWN_SETSCHEDPARAM: c_short = 5;
-pub const POSIX_SPAWN_SETSCHEDULER: c_short = 6;
-pub const POSIX_SPAWN_SETSID: c_short = 7;
+pub const POSIX_SPAWN_RESETIDS: c_short = 0x01;
+pub const POSIX_SPAWN_SETPGROUP: c_short = 0x02;
+pub const POSIX_SPAWN_SETSIGDEF: c_short = 0x04;
+pub const POSIX_SPAWN_SETSIGMASK: c_short = 0x08;
+pub const POSIX_SPAWN_SETSCHEDPARAM: c_short = 0x10;
+pub const POSIX_SPAWN_SETSCHEDULER: c_short = 0x20;
+pub const POSIX_SPAWN_SETSID: c_short = 0x80;
 
 /// A spawn attributes object.
 #[repr(C)]
