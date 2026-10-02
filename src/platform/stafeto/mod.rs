@@ -111,9 +111,15 @@ unsafe extern "C" {
     fn stafeto_testcancel() -> c_int;
     fn stafeto_setcancelstate(state: c_int, old: *mut c_int) -> c_int;
     fn stafeto_setcanceltype(kind: c_int, old: *mut c_int) -> c_int;
-    /// posix_spawn of the program at `path` with the spawn-flags
-    /// `flags` and the process group `pgroup`: the child's PID.
-    fn stafeto_spawn(path: *const c_char, flags: c_int, pgroup: pid_t) -> pid_t;
+    /// posix_spawn of the program at `path` with `argv` and `envp`
+    /// (NULL-ended; null for none) and the attributes at `attributes`
+    /// (null for none): the child's PID.
+    fn stafeto_spawn(
+        path: *const c_char,
+        argv: *const *const c_char,
+        envp: *const *const c_char,
+        attributes: *const SpawnAttributes,
+    ) -> pid_t;
     /// waitpid: the child's PID (0 for WNOHANG with none), its status in
     /// `status`.
     fn stafeto_waitpid(pid: pid_t, status: *mut c_int, options: c_int) -> pid_t;
@@ -127,8 +133,19 @@ unsafe extern "C" {
     fn stafeto_getsid(pid: pid_t) -> c_int;
 }
 
+/// The attributes of posix_spawn the layer takes: the spawn-flags, the
+/// process group, the masks of POSIX_SPAWN_SETSIGMASK and
+/// POSIX_SPAWN_SETSIGDEF.
+#[repr(C)]
+struct SpawnAttributes {
+    flags: c_int,
+    pgroup: c_int,
+    mask: u64,
+    default: u64,
+}
+
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 7;
+const PLATFORM_INTERFACE: u64 = 8;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -784,20 +801,37 @@ impl Pal for Sys {
         true
     }
 
-    /// The layer makes the child from the program and the arguments the
-    /// table of stafeto's boot gives it: `argv` and `envp` do not reach
-    /// it yet, and file actions are EINVAL.
+    /// The layer's loader starts the program in the file at `program`
+    /// with `argv`, `envp` and the attributes (stafeto 5c); file actions
+    /// are EINVAL until the layer takes them.
     unsafe fn spawn(
         program: CStr,
         fac: Option<&crate::header::spawn::posix_spawn_file_actions_t>,
         fat: Option<&crate::header::spawn::posix_spawnattr_t>,
-        argv: crate::iter::NulTerminated<*mut c_char>,
+        mut argv: crate::iter::NulTerminated<*mut c_char>,
         envp: Option<crate::iter::NulTerminated<*mut c_char>>,
     ) -> Result<pid_t> {
         if fac.is_some_and(|actions| actions.into_iter().next().is_some()) {
             return Err(Errno(EINVAL));
         }
-        let (flags, pgroup) = fat.map_or((0, 0), |attr| (c_int::from(attr.flags), attr.pgroup));
-        ret(unsafe { stafeto_spawn(program.as_ptr(), flags, pgroup) } as isize).map(|v| v as pid_t)
+        static NONE: [usize; 1] = [0];
+        let none = NONE.as_ptr().cast::<*const c_char>();
+        // The first element's place is the array's: each list is NULL-ended.
+        let list = |first: Option<&*mut c_char>| {
+            first.map_or(none, |p| (p as *const *mut c_char).cast::<*const c_char>())
+        };
+        let argv = list(argv.next());
+        let envp = envp.map_or(none, |mut e| list(e.next()));
+        let attributes = fat.map(|attr| SpawnAttributes {
+            flags: c_int::from(attr.flags),
+            pgroup: attr.pgroup,
+            mask: attr.sigmask,
+            default: attr.sigdefault,
+        });
+        let attributes = attributes
+            .as_ref()
+            .map_or(core::ptr::null(), |a| a as *const SpawnAttributes);
+        ret(unsafe { stafeto_spawn(program.as_ptr(), argv, envp, attributes) } as isize)
+            .map(|v| v as pid_t)
     }
 }
