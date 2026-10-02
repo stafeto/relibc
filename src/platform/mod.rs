@@ -20,8 +20,14 @@ mod pal;
 
 pub use self::sys::Sys;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(stafeto)))]
 #[path = "linux/mod.rs"]
+pub(crate) mod sys;
+
+// stafeto: the Linux C ABI (target_os = "linux"), its calls to the POSIX
+// system layer of stafeto instead of the Linux kernel.
+#[cfg(stafeto)]
+#[path = "stafeto/mod.rs"]
 pub(crate) mod sys;
 
 #[cfg(target_os = "redox")]

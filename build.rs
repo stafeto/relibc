@@ -40,6 +40,7 @@ fn main() {
     eprintln!("relibc: commit hash `{commit_hash}`");
     println!("cargo:rustc-env=RELIBC_COMMIT_HASH={commit_hash}");
 
+    println!("cargo:rustc-check-cfg=cfg(stafeto)");
     let target = env::var("TARGET").unwrap();
 
     println!("cargo:rerun-if-changed=src/c");

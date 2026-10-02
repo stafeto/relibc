@@ -27,7 +27,7 @@ extern crate memchr;
 extern crate posix_regex;
 extern crate rand;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(stafeto)))]
 #[macro_use]
 extern crate sc;
 
