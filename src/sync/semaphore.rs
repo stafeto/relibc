@@ -57,6 +57,12 @@ impl Semaphore {
 
     pub fn wait(&self, timeout_opt: Option<&timespec>, clock_id: clockid_t) -> Result<()> {
         loop {
+            // A cancellation point (sem_wait, sem_timedwait): on stafeto a
+            // request wakes the wait by address, which comes back here.
+            #[cfg(stafeto)]
+            unsafe {
+                crate::pthread::testcancel()
+            };
             if self.try_wait() {
                 return Ok(());
             }

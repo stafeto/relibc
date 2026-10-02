@@ -295,6 +295,15 @@ pub fn current_thread() -> Option<&'static Pthread> {
 }
 
 pub unsafe fn testcancel() {
+    // stafeto: the request and the state live in the platform's thread
+    // block; it says whether this point acts.
+    #[cfg(stafeto)]
+    {
+        if crate::platform::sys::testcancel() {
+            unsafe { cancel_current_thread() };
+        }
+        return;
+    }
     let this_thread = current_thread().expect("current thread not present");
 
     if this_thread.has_queued_cancelation.load(Ordering::Acquire)
@@ -378,6 +387,9 @@ unsafe fn cancel_current_thread() {
 }
 
 pub unsafe fn cancel(thread: &Pthread) -> Result<(), Errno> {
+    // stafeto: deferred cancellation by the platform, with no signal.
+    #[cfg(stafeto)]
+    return crate::platform::sys::cancel(unsafe { thread.os_tid.get().read() });
     // TODO: What order should these atomic bools be accessed in?
     thread.has_queued_cancelation.store(true, Ordering::Release);
 
@@ -401,6 +413,8 @@ pub fn set_sched_priority(_thread: &Pthread, _prio: c_int) -> Result<(), Errno> 
     Ok(())
 }
 pub fn set_cancel_state(state: c_int) -> Result<c_int, Errno> {
+    #[cfg(stafeto)]
+    return crate::platform::sys::set_cancel_state(state);
     let this_thread = current_thread().expect("current thread not present");
 
     let was_cancelable = match state {
@@ -429,6 +443,8 @@ pub fn set_cancel_state(state: c_int) -> Result<c_int, Errno> {
     })
 }
 pub fn set_cancel_type(ty: c_int) -> Result<c_int, Errno> {
+    #[cfg(stafeto)]
+    return crate::platform::sys::set_cancel_type(ty);
     #[expect(unused_variables, reason = "function not yet fully implemented")]
     let this_thread = current_thread().expect("current thread not present");
 

@@ -133,8 +133,27 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
     mutex: *mut pthread_mutex_t,
     abstime: *const timespec,
 ) -> c_int {
-    e((unsafe { &*cond.cast::<RlctCond>() })
-        .timedwait(unsafe { &*mutex.cast::<RlctMutex>() }, unsafe { &*abstime }))
+    cancellation_point(|| {
+        e((unsafe { &*cond.cast::<RlctCond>() })
+            .timedwait(unsafe { &*mutex.cast::<RlctMutex>() }, unsafe { &*abstime }))
+    })
+}
+
+/// A wait on a condition is a cancellation point: the request is looked at
+/// before the wait and after it, with the mutex held again. On stafeto a
+/// request wakes the wait (the platform's waits by address); elsewhere
+/// cancellation goes by signal.
+fn cancellation_point(wait: impl FnOnce() -> c_int) -> c_int {
+    #[cfg(stafeto)]
+    unsafe {
+        crate::pthread::testcancel()
+    };
+    let status = wait();
+    #[cfg(stafeto)]
+    unsafe {
+        crate::pthread::testcancel()
+    };
+    status
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_cond_clockwait.html>.
@@ -161,11 +180,13 @@ pub unsafe extern "C" fn pthread_cond_clockwait(
     clock_id: clockid_t,
     abstime: *const timespec,
 ) -> c_int {
-    e((unsafe { &*cond.cast::<RlctCond>() }).clockwait(
-        unsafe { &*mutex.cast::<RlctMutex>() },
-        unsafe { &*abstime },
-        clock_id,
-    ))
+    cancellation_point(|| {
+        e((unsafe { &*cond.cast::<RlctCond>() }).clockwait(
+            unsafe { &*mutex.cast::<RlctMutex>() },
+            unsafe { &*abstime },
+            clock_id,
+        ))
+    })
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_cond_wait.html>.
@@ -187,7 +208,9 @@ pub unsafe extern "C" fn pthread_cond_wait(
     cond: *mut pthread_cond_t,
     mutex: *mut pthread_mutex_t,
 ) -> c_int {
-    e((unsafe { &*cond.cast::<RlctCond>() }).wait(unsafe { &*mutex.cast::<RlctMutex>() }))
+    cancellation_point(|| {
+        e((unsafe { &*cond.cast::<RlctCond>() }).wait(unsafe { &*mutex.cast::<RlctMutex>() }))
+    })
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_condattr_destroy.html>.
