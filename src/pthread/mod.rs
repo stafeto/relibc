@@ -245,6 +245,10 @@ unsafe extern "C" fn new_thread_shim(
 
     unsafe { tcb.pthread.os_tid.get().write(Sys::current_os_tid()) };
 
+    // The thread's entry of signals, once its TLS is ready for a handler.
+    #[cfg(stafeto)]
+    crate::platform::sys::thread_started();
+
     unsafe { (&*synchronization_mutex).manual_unlock() };
 
     #[cfg(target_os = "redox")]
@@ -310,6 +314,11 @@ pub unsafe fn exit_current_thread(retval: Retval) -> ! {
     let stack_base = this.stack_base;
     let stack_size = this.stack_size;
 
+    // No signal handler and no cancellation from here on: the thread runs
+    // past its destructors, and its TCB is given away below.
+    #[cfg(stafeto)]
+    crate::platform::sys::thread_leaving();
+
     // dealloc_thread() or waitval.post() might unmaps the tcb so extract the thread_fd now
     #[cfg(target_os = "redox")]
     let status_fd = {
@@ -339,6 +348,9 @@ unsafe fn dealloc_thread(thread: &Pthread) {
     unsafe {
         OS_TID_TO_PTHREAD.lock().remove(&thread.os_tid.get().read());
     }
+    // The platform frees the TCB and the stack once the thread ended.
+    #[cfg(stafeto)]
+    crate::platform::sys::thread_release(unsafe { thread.os_tid.get().read() });
     #[cfg(target_os = "redox")]
     unsafe {
         let tcb = thread.tcb_selfref.get().read();
