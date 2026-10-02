@@ -238,6 +238,12 @@ pub type stack_t = sigaltstack;
 //     https://git.musl-libc.org/cgit/musl/commit/?id=583e55122e767b1586286a0d9c35e2a4027998ab
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __sigsetjmp_tail(jb: *mut c_ulonglong, ret: c_int) -> c_int {
+    // The signal mask lies after the registers and the words sigsetjmp
+    // keeps: word 23 on AArch64 (sigsetjmp.s stores at 176 and 192), word
+    // 9 on x86_64.
+    #[cfg(target_arch = "aarch64")]
+    let set = jb.wrapping_add(23);
+    #[cfg(not(target_arch = "aarch64"))]
     let set = jb.wrapping_add(9);
     if ret > 0 {
         unsafe { sigprocmask(SIG_SETMASK, set, ptr::null_mut()) };
