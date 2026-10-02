@@ -418,9 +418,9 @@ pub unsafe fn init_inner(auxvs: Box<[[usize; 2]]>) {
             redox_rt::sys::swap_umask((umask as u32) & u32::from(MODE_PERM) & !(S_ISVTX as u32));
     }
 }
-#[expect(clippy::boxed_local)]
 #[cfg(stafeto)]
-pub unsafe fn init(_auxvs: Box<[[usize; 2]]>) {
+pub unsafe fn init(auxvs: Box<[[usize; 2]]>) {
+    crate::header::sys_auxv::keep(auxvs);
     unsafe { sys::init() }
 }
 #[expect(clippy::boxed_local)]
