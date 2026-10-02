@@ -69,6 +69,10 @@ pub unsafe fn terminate_from_main_thread() {
 bitflags::bitflags! {
     pub struct PthreadFlags: usize {
         const DETACHED = 1;
+        /// The thread passed the point where it decides between posting
+        /// its value and freeing itself (stafeto: the later of detach and
+        /// that point frees it).
+        const EXITED = 2;
     }
 }
 
@@ -284,9 +288,17 @@ pub unsafe fn join(thread: &Pthread) -> Result<Retval, Errno> {
 }
 
 pub unsafe fn detach(thread: &Pthread) -> Result<(), Errno> {
-    thread
+    let previous = thread
         .flags
         .fetch_or(PthreadFlags::DETACHED.bits(), Ordering::AcqRel);
+    // stafeto: a thread that already ended joinable is freed by its
+    // detach; nothing else would join it.
+    #[cfg(stafeto)]
+    if previous & PthreadFlags::EXITED.bits() != 0 {
+        unsafe { dealloc_thread(thread) };
+    }
+    #[cfg(not(stafeto))]
+    let _ = previous;
     Ok(())
 }
 
@@ -336,7 +348,15 @@ pub unsafe fn exit_current_thread(retval: Retval) -> ! {
         thread_fd.dup_into_upper(b"status").unwrap()
     };
 
-    if this.flags.load(Ordering::Acquire) & PthreadFlags::DETACHED.bits() != 0 {
+    // stafeto: setting EXITED and reading DETACHED in one step pairs with
+    // detach, so exactly one of the two frees a detached thread.
+    #[cfg(stafeto)]
+    let flags = this
+        .flags
+        .fetch_or(PthreadFlags::EXITED.bits(), Ordering::AcqRel);
+    #[cfg(not(stafeto))]
+    let flags = this.flags.load(Ordering::Acquire);
+    if flags & PthreadFlags::DETACHED.bits() != 0 {
         // When detached, the thread state no longer makes any sense, and can immediately be
         // deallocated.
         unsafe { dealloc_thread(this) };
