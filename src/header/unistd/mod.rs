@@ -1337,11 +1337,16 @@ pub extern "C" fn ttyname_r(fildes: c_int, name: *mut c_char, namesize: size_t) 
         return errno::ERANGE;
     }
 
-    let len = Sys::fpath(fildes, &mut name[..namesize - 1])
-        .map(|read| read as ssize_t)
-        .or_minus_one_errno();
+    // The terminal's name is the layer's to give on stafeto: it resolves
+    // the names of terminals, and answers ENOTTY for any other descriptor.
+    #[cfg(stafeto)]
+    let found = Sys::ttyname(fildes, &mut name[..namesize - 1]);
+    #[cfg(not(stafeto))]
+    let found = Sys::fpath(fildes, &mut name[..namesize - 1]);
+    let len = found.map(|read| read as ssize_t).or_minus_one_errno();
+    // POSIX: the error number itself.
     if len < 0 {
-        return -platform::ERRNO.get();
+        return platform::ERRNO.get();
     }
     name[len.cast_unsigned()] = 0;
 
