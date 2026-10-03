@@ -1297,7 +1297,7 @@ pub extern "C" fn tcsetpgrp(fildes: c_int, pgid_id: pid_t) -> c_int {
     if unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TIOCSPGRP, &raw const pgid_id as _) } < 0 {
         return -1;
     }
-    pgid_id
+    0
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/truncate.html>.
