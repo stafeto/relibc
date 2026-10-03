@@ -201,6 +201,13 @@ pub(crate) unsafe fn init() {
         );
         Sys::exit(125);
     }
+    // The first handlers of fork: the allocator's lock is the forking
+    // thread's, its prepare handler the last to run.
+    crate::header::pthread::pthread_atfork(
+        Some(crate::platform::fork_lock_allocator),
+        Some(crate::platform::fork_unlock_allocator),
+        Some(crate::platform::fork_unlock_allocator),
+    );
 }
 
 /// The stafeto layer returns a value or a negated errno.

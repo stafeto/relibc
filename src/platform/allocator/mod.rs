@@ -31,6 +31,20 @@ impl Allocator {
     }
 }
 
+/// fork's prepare handler on stafeto (pthread_atfork): the forking thread
+/// takes the allocator's lock, so that no other thread holds it in the
+/// copy the child gets.
+#[cfg(stafeto)]
+pub extern "C" fn fork_lock_allocator() {
+    unsafe { (*ALLOCATOR.get()).manual_lock() };
+}
+
+/// fork's parent and child handler on stafeto: the lock goes again.
+#[cfg(stafeto)]
+pub extern "C" fn fork_unlock_allocator() {
+    unsafe { (*ALLOCATOR.get()).manual_unlock() };
+}
+
 unsafe impl GlobalAlloc for Allocator {
     #[inline]
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
