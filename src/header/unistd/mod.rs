@@ -475,10 +475,14 @@ pub unsafe extern "C" fn fork() -> pid_t {
         for child in unsafe { &fork_hooks[2] } {
             child();
         }
-    } else if pid != -1 {
+    } else {
+        // A fork that failed runs the parent handlers too, so that what
+        // the prepare handlers took goes again, with fork's errno kept.
+        let errno = ERRNO.get();
         for parent in unsafe { &fork_hooks[1] } {
             parent();
         }
+        ERRNO.set(errno);
     }
     pid
 }
