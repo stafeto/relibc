@@ -574,6 +574,17 @@ impl Pal for Sys {
         if len == 0 {
             return Err(Errno(EINVAL));
         }
+        // POSIX mmap: EINVAL when neither MAP_PRIVATE nor MAP_SHARED is set;
+        // ENOTSUP for a flag the implementation does not support. A shared
+        // anonymous mapping must stay shared with a forked child, and the
+        // layer has no shared memory yet, so MAP_SHARED is refused.
+        let kinds = crate::header::sys_mman::MAP_PRIVATE | crate::header::sys_mman::MAP_SHARED;
+        if flags & kinds == 0 {
+            return Err(Errno(EINVAL));
+        }
+        if flags & crate::header::sys_mman::MAP_SHARED != 0 {
+            return Err(Errno(crate::header::errno::ENOTSUP));
+        }
         // Anonymous private memory only, from the layer's heap.
         if fildes != -1 || flags & crate::header::sys_mman::MAP_ANONYMOUS == 0 || !addr.is_null() {
             return Err(Errno(ENOSYS));
