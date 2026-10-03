@@ -172,6 +172,17 @@ struct SpawnAction {
     path: *const c_char,
 }
 
+/// The parts of a readv or writev before the first that has bytes and no
+/// buffer: the bytes of the parts before it move, and the call gives
+/// their count; EFAULT when the first part is such.
+fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
+    match parts.iter().position(|p| p.iov_base.is_null() && p.iov_len > 0) {
+        Some(0) => Err(Errno(crate::header::errno::EFAULT)),
+        Some(n) => Ok(&parts[..n]),
+        None => Ok(parts),
+    }
+}
+
 /// The most bytes one read of the layer gives (proto_fs::MAX_READ).
 const STAFETO_READ_MAX: usize = 1016;
 
@@ -747,6 +758,9 @@ impl Pal for Sys {
             return Err(Errno(EINVAL));
         }
         let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
+        // The parts up to one without its buffer, which the read never
+        // reaches (EFAULT when it is the first).
+        let parts = valid_parts(parts)?;
         let total = parts.iter().fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
         if let Some(first) = parts.iter().find(|p| p.iov_len > 0)
             && first.iov_len >= total.min(STAFETO_READ_MAX)
@@ -886,7 +900,8 @@ impl Pal for Sys {
         if !(1..=1024).contains(&iovcnt) {
             return Err(Errno(EINVAL));
         }
-        let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
+        let all = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
+        let parts = valid_parts(all)?;
         let total = parts.iter().fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
         // Up to {PIPE_BUF} bytes go as one write: a pipe takes them whole,
         // and no other writer's bytes come between the parts.
@@ -907,7 +922,7 @@ impl Pal for Sys {
         }
         // Past it, each part in turn; a short write ends the call.
         let mut total = 0;
-        for part in parts {
+        for part in all {
             // An error after bytes moved gives the bytes; the next call
             // meets the error.
             let wrote =
