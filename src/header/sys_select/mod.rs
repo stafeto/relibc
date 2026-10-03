@@ -2,6 +2,9 @@
 //!
 //! See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sys_select.h.html>.
 
+#[cfg(stafeto)]
+use crate::error::ResultExt;
+
 use core::mem;
 
 use cbitset::BitSet;
@@ -17,8 +20,11 @@ use crate::{
         },
         time::timespec,
     },
-    platform::types::{c_int, suseconds_t},
+    platform::types::c_int,
 };
+
+#[cfg(not(stafeto))]
+use crate::platform::types::suseconds_t;
 
 pub use crate::header::bits_timeval::timeval;
 
@@ -201,40 +207,48 @@ pub unsafe extern "C" fn select(
     exceptfds: *mut fd_set,
     timeout: *mut timeval,
 ) -> c_int {
-    trace_expr!(
-        unsafe {
-            select_epoll(
-                nfds,
-                if readfds.is_null() {
-                    None
-                } else {
-                    Some(&mut *readfds)
-                },
-                if writefds.is_null() {
-                    None
-                } else {
-                    Some(&mut *writefds)
-                },
-                if exceptfds.is_null() {
-                    None
-                } else {
-                    Some(&mut *exceptfds)
-                },
-                if timeout.is_null() {
-                    None
-                } else {
-                    Some(&mut *timeout)
-                },
-                core::ptr::null(),
-            )
-        },
-        "select({}, {:p}, {:p}, {:p}, {:p})",
-        nfds,
-        readfds,
-        writefds,
-        exceptfds,
-        timeout
-    )
+    #[cfg(stafeto)]
+    {
+        unsafe { crate::platform::Sys::select_direct(nfds, readfds, writefds, exceptfds, timeout) }
+            .or_minus_one_errno()
+    }
+    #[cfg(not(stafeto))]
+    {
+        trace_expr!(
+            unsafe {
+                select_epoll(
+                    nfds,
+                    if readfds.is_null() {
+                        None
+                    } else {
+                        Some(&mut *readfds)
+                    },
+                    if writefds.is_null() {
+                        None
+                    } else {
+                        Some(&mut *writefds)
+                    },
+                    if exceptfds.is_null() {
+                        None
+                    } else {
+                        Some(&mut *exceptfds)
+                    },
+                    if timeout.is_null() {
+                        None
+                    } else {
+                        Some(&mut *timeout)
+                    },
+                    core::ptr::null(),
+                )
+            },
+            "select({}, {:p}, {:p}, {:p}, {:p})",
+            nfds,
+            readfds,
+            writefds,
+            exceptfds,
+            timeout
+        )
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pselect.html>.
@@ -257,45 +271,57 @@ pub unsafe extern "C" fn pselect(
     timeout: *const timespec,
     sigmask: *const sigset_t,
 ) -> c_int {
-    let mut micro_timeout = if timeout.is_null() {
-        None
-    } else {
+    #[cfg(stafeto)]
+    {
         unsafe {
-            Some(timeval {
-                tv_sec: (*timeout).tv_sec,
-                tv_usec: ((*timeout).tv_nsec / 1000) as suseconds_t,
-            })
-        }
-    };
-    trace_expr!(
-        unsafe {
-            select_epoll(
-                nfds,
-                if readfds.is_null() {
-                    None
-                } else {
-                    Some(&mut *readfds)
-                },
-                if writefds.is_null() {
-                    None
-                } else {
-                    Some(&mut *writefds)
-                },
-                if exceptfds.is_null() {
-                    None
-                } else {
-                    Some(&mut *exceptfds)
-                },
-                micro_timeout.as_mut(),
-                sigmask,
+            crate::platform::Sys::pselect_direct(
+                nfds, readfds, writefds, exceptfds, timeout, sigmask,
             )
-        },
-        "pselect({}, {:p}, {:p}, {:p}, {:p}, {:p})",
-        nfds,
-        readfds,
-        writefds,
-        exceptfds,
-        timeout,
-        sigmask,
-    )
+        }
+        .or_minus_one_errno()
+    }
+    #[cfg(not(stafeto))]
+    {
+        let mut micro_timeout = if timeout.is_null() {
+            None
+        } else {
+            unsafe {
+                Some(timeval {
+                    tv_sec: (*timeout).tv_sec,
+                    tv_usec: ((*timeout).tv_nsec / 1000) as suseconds_t,
+                })
+            }
+        };
+        trace_expr!(
+            unsafe {
+                select_epoll(
+                    nfds,
+                    if readfds.is_null() {
+                        None
+                    } else {
+                        Some(&mut *readfds)
+                    },
+                    if writefds.is_null() {
+                        None
+                    } else {
+                        Some(&mut *writefds)
+                    },
+                    if exceptfds.is_null() {
+                        None
+                    } else {
+                        Some(&mut *exceptfds)
+                    },
+                    micro_timeout.as_mut(),
+                    sigmask,
+                )
+            },
+            "pselect({}, {:p}, {:p}, {:p}, {:p}, {:p})",
+            nfds,
+            readfds,
+            writefds,
+            exceptfds,
+            timeout,
+            sigmask,
+        )
+    }
 }

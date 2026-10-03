@@ -13,12 +13,14 @@ use crate::{
     c_str::CStr,
     error::{Errno, Result},
     header::{
+        bits_sigset_t::sigset_t,
         dirent::dirent,
         errno::{EINVAL, EIO, ENOSYS},
         fcntl::AT_EMPTY_PATH,
+        poll::{nfds_t, pollfd},
         signal::{SIGCHLD, sigevent},
         sys_resource::{rlimit, rusage},
-        sys_select::timeval,
+        sys_select::{fd_set, timeval},
         sys_stat::{S_IFIFO, stat},
         sys_statvfs::statvfs,
         sys_time::timezone,
@@ -73,6 +75,28 @@ unsafe extern "C" {
     fn stafeto_exit_thread(stack: *mut c_void, size: usize) -> !;
     fn stafeto_sched_yield() -> c_int;
     fn stafeto_nanosleep(request: *const timespec, remaining: *mut timespec) -> c_int;
+    fn stafeto_poll(fds: *mut pollfd, count: nfds_t, timeout: c_int) -> c_int;
+    fn stafeto_ppoll(
+        fds: *mut pollfd,
+        count: nfds_t,
+        timeout: *const timespec,
+        mask: *const sigset_t,
+    ) -> c_int;
+    fn stafeto_select(
+        count: c_int,
+        read: *mut fd_set,
+        write: *mut fd_set,
+        except: *mut fd_set,
+        timeout: *mut timeval,
+    ) -> c_int;
+    fn stafeto_pselect(
+        count: c_int,
+        read: *mut fd_set,
+        write: *mut fd_set,
+        except: *mut fd_set,
+        timeout: *const timespec,
+        mask: *const sigset_t,
+    ) -> c_int;
     /// clock_nanosleep: 0 or an error number.
     fn stafeto_clock_nanosleep(
         clock: clockid_t,
@@ -182,7 +206,10 @@ struct SpawnAction {
 /// buffer: the bytes of the parts before it move, and the call gives
 /// their count; EFAULT when the first part is such.
 fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
-    match parts.iter().position(|p| p.iov_base.is_null() && p.iov_len > 0) {
+    match parts
+        .iter()
+        .position(|p| p.iov_base.is_null() && p.iov_len > 0)
+    {
         Some(0) => Err(Errno(crate::header::errno::EFAULT)),
         Some(n) => Ok(&parts[..n]),
         None => Ok(parts),
@@ -226,11 +253,7 @@ pub(crate) unsafe fn init() {
     }
     // The first handlers of fork, whose prepare handler runs after all
     // others: relibc's own locks are the forking thread's across the copy.
-    crate::header::pthread::pthread_atfork(
-        Some(fork_prepare),
-        Some(fork_parent),
-        Some(fork_child),
-    );
+    crate::header::pthread::pthread_atfork(Some(fork_prepare), Some(fork_parent), Some(fork_child));
 }
 
 /// fork's prepare handler: relibc's locks in a fixed order, that of their
@@ -337,6 +360,20 @@ pub(crate) fn set_cancel_type(kind: c_int) -> Result<c_int> {
     ret(unsafe { stafeto_setcanceltype(kind, &raw mut old) } as isize).map(|_| old)
 }
 
+/// Linux AArch64 layouts passed directly to posix-platform's wait calls.
+const _: () = {
+    assert!(mem::size_of::<pollfd>() == 8);
+    assert!(mem::offset_of!(pollfd, fd) == 0);
+    assert!(mem::offset_of!(pollfd, events) == 4);
+    assert!(mem::offset_of!(pollfd, revents) == 6);
+    assert!(mem::size_of::<fd_set>() == 128);
+    assert!(mem::align_of::<fd_set>() == 8);
+    assert!(mem::size_of::<timespec>() == 16);
+    assert!(mem::offset_of!(timespec, tv_nsec) == 8);
+    assert!(mem::size_of::<timeval>() == 16);
+    assert!(mem::offset_of!(timeval, tv_usec) == 8);
+};
+
 /// The terminal interface as the layer's posix-platform and the terminal
 /// service's proto_tty have it: struct termios of Linux AArch64 (glibc's,
 /// 60 bytes: four flag words, the line, 32 control characters, two
@@ -377,6 +414,43 @@ const _: () = {
 pub struct Sys;
 
 impl Sys {
+    /// Multiplexes descriptors directly through the layer's bounded watches.
+    pub unsafe fn poll_direct(fds: *mut pollfd, count: nfds_t, timeout: c_int) -> Result<c_int> {
+        ret(unsafe { stafeto_poll(fds, count, timeout) } as isize).map(|count| count as c_int)
+    }
+
+    pub unsafe fn ppoll_direct(
+        fds: *mut pollfd,
+        count: nfds_t,
+        timeout: *const timespec,
+        mask: *const sigset_t,
+    ) -> Result<c_int> {
+        ret(unsafe { stafeto_ppoll(fds, count, timeout, mask) } as isize)
+            .map(|count| count as c_int)
+    }
+
+    pub unsafe fn select_direct(
+        count: c_int,
+        read: *mut fd_set,
+        write: *mut fd_set,
+        except: *mut fd_set,
+        timeout: *mut timeval,
+    ) -> Result<c_int> {
+        ret(unsafe { stafeto_select(count, read, write, except, timeout) } as isize)
+            .map(|count| count as c_int)
+    }
+
+    pub unsafe fn pselect_direct(
+        count: c_int,
+        read: *mut fd_set,
+        write: *mut fd_set,
+        except: *mut fd_set,
+        timeout: *const timespec,
+        mask: *const sigset_t,
+    ) -> Result<c_int> {
+        ret(unsafe { stafeto_pselect(count, read, write, except, timeout, mask) } as isize)
+            .map(|count| count as c_int)
+    }
     pub unsafe fn ioctl(fd: c_int, request: c_ulong, out: *mut c_void) -> Result<c_int> {
         ret(unsafe { stafeto_ioctl(fd, request, out) } as isize).map(|v| v as c_int)
     }
@@ -601,8 +675,7 @@ impl Pal for Sys {
     }
 
     fn getrandom(buf: &mut [u8], flags: c_uint) -> Result<usize> {
-        ret(unsafe { stafeto_getrandom(buf.as_mut_ptr(), buf.len(), flags) })
-            .map(|n| n as usize)
+        ret(unsafe { stafeto_getrandom(buf.as_mut_ptr(), buf.len(), flags) }).map(|n| n as usize)
     }
 
     fn getrlimit(resource: c_int, mut rlim: Out<rlimit>) -> Result<()> {
@@ -810,7 +883,9 @@ impl Pal for Sys {
         // The parts up to one without its buffer, which the read never
         // reaches (EFAULT when it is the first).
         let parts = valid_parts(parts)?;
-        let total = parts.iter().fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
+        let total = parts
+            .iter()
+            .fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
         if let Some(first) = parts.iter().find(|p| p.iov_len > 0)
             && first.iov_len >= total.min(STAFETO_READ_MAX)
         {
@@ -827,7 +902,9 @@ impl Pal for Sys {
                 break;
             }
             let n = part.iov_len.min(got - at);
-            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr().add(at), part.iov_base.cast::<u8>(), n) };
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr().add(at), part.iov_base.cast::<u8>(), n)
+            };
             at += n;
         }
         Ok(got)
@@ -951,7 +1028,9 @@ impl Pal for Sys {
         }
         let all = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
         let parts = valid_parts(all)?;
-        let total = parts.iter().fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
+        let total = parts
+            .iter()
+            .fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
         // Up to {PIPE_BUF} bytes go as one write: a pipe takes them whole,
         // and no other writer's bytes come between the parts.
         if parts.len() > 1 && total <= crate::header::limits::PIPE_BUF as usize {
@@ -1006,8 +1085,9 @@ impl Pal for Sys {
         use crate::header::spawn::Action;
         // The actions own their paths, which the layer reads through the
         // list built from them.
-        let owned: alloc::vec::Vec<Action> =
-            fac.map_or(alloc::vec::Vec::new(), |actions| actions.into_iter().collect());
+        let owned: alloc::vec::Vec<Action> = fac.map_or(alloc::vec::Vec::new(), |actions| {
+            actions.into_iter().collect()
+        });
         let file_actions: alloc::vec::Vec<SpawnAction> = owned
             .iter()
             .map(|action| {

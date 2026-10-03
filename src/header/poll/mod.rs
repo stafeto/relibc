@@ -2,7 +2,12 @@
 //!
 //! See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/poll.h.html>.
 
-use core::{mem, ptr, slice};
+#[cfg(stafeto)]
+use crate::error::ResultExt;
+
+use core::mem;
+#[cfg(not(stafeto))]
+use core::{ptr, slice};
 
 use crate::{
     error::Errno,
@@ -182,16 +187,23 @@ pub unsafe fn poll_epoll(fds: &mut [pollfd], timeout: c_int, sigmask: *const sig
 /// - A `timeout` of `-1` is equivalent to passing a null pointer for `tmo_p` to `ppoll`.
 /// - `poll` should behave equivalent to `ppoll` with a null pointer for `sigmask`.
 ///
-/// Note: Uses epoll internally.
+/// Uses the platform's multiplexing backend.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn poll(fds: *mut pollfd, nfds: nfds_t, timeout: c_int) -> c_int {
-    let fd_buf = unsafe { slice::from_raw_parts_mut(fds, nfds as usize) };
-    trace_expr!(
-        unsafe { poll_epoll(fd_buf, timeout, ptr::null_mut(),) },
-        "poll({:?}, {})",
-        fd_buf,
-        timeout,
-    )
+    #[cfg(stafeto)]
+    {
+        unsafe { crate::platform::Sys::poll_direct(fds, nfds, timeout) }.or_minus_one_errno()
+    }
+    #[cfg(not(stafeto))]
+    {
+        let fd_buf = unsafe { slice::from_raw_parts_mut(fds, nfds as usize) };
+        trace_expr!(
+            unsafe { poll_epoll(fd_buf, timeout, ptr::null_mut(),) },
+            "poll({:?}, {})",
+            fd_buf,
+            timeout,
+        )
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/ppoll.html>.
@@ -202,7 +214,7 @@ pub unsafe extern "C" fn poll(fds: *mut pollfd, nfds: nfds_t, timeout: c_int) ->
 /// - The `tmo_p` parameter is the timeout as represented by a `timespec` struct.
 /// - Passing a null pointer for timeout is equivalent to `-1` for `timeout` to `poll`.
 ///
-/// Note: Uses epoll internally.
+/// Uses the platform's multiplexing backend.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ppoll(
     fds: *mut pollfd,
@@ -210,22 +222,30 @@ pub unsafe extern "C" fn ppoll(
     tmo_p: *const timespec,
     sigmask: *const sigset_t,
 ) -> c_int {
-    let timeout = if tmo_p.is_null() {
-        -1
-    } else {
-        let tmo = unsafe { &*tmo_p };
-        if tmo.tv_sec > (c_int::MAX / 1000).into() {
-            c_int::MAX
+    #[cfg(stafeto)]
+    {
+        unsafe { crate::platform::Sys::ppoll_direct(fds, nfds, tmo_p, sigmask) }
+            .or_minus_one_errno()
+    }
+    #[cfg(not(stafeto))]
+    {
+        let timeout = if tmo_p.is_null() {
+            -1
         } else {
-            ((tmo.tv_sec as c_int) * 1000) + ((tmo.tv_nsec as c_int) / 1000000)
-        }
-    };
-    let fd_buf = unsafe { slice::from_raw_parts_mut(fds, nfds as usize) };
-    trace_expr!(
-        unsafe { poll_epoll(fd_buf, timeout, sigmask,) },
-        "ppoll({:?}, {:?}, {:p})",
-        fd_buf,
-        timeout,
-        sigmask
-    )
+            let tmo = unsafe { &*tmo_p };
+            if tmo.tv_sec > (c_int::MAX / 1000).into() {
+                c_int::MAX
+            } else {
+                ((tmo.tv_sec as c_int) * 1000) + ((tmo.tv_nsec as c_int) / 1000000)
+            }
+        };
+        let fd_buf = unsafe { slice::from_raw_parts_mut(fds, nfds as usize) };
+        trace_expr!(
+            unsafe { poll_epoll(fd_buf, timeout, sigmask,) },
+            "ppoll({:?}, {:?}, {:p})",
+            fd_buf,
+            timeout,
+            sigmask
+        )
+    }
 }
