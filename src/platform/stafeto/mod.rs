@@ -88,6 +88,9 @@ unsafe extern "C" {
     /// and stack may go once the kernel told of its end.
     fn stafeto_thread_release(id: c_int);
     fn stafeto_ioctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int;
+    /// The name of the terminal `fd` is, NUL-terminated, into `len` bytes at
+    /// `buf`: its length, or a negated errno (ENOTTY, ERANGE).
+    fn stafeto_ttyname(fd: c_int, buf: *mut u8, len: usize) -> isize;
     fn stafeto_chdir(path: *const c_char) -> c_int;
     fn stafeto_clock_settime(clock: clockid_t, time: *const timespec) -> c_int;
     fn stafeto_dup(fd: c_int) -> c_int;
@@ -190,7 +193,7 @@ fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 13;
+const PLATFORM_INTERFACE: u64 = 14;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -334,12 +337,54 @@ pub(crate) fn set_cancel_type(kind: c_int) -> Result<c_int> {
     ret(unsafe { stafeto_setcanceltype(kind, &raw mut old) } as isize).map(|_| old)
 }
 
+/// The terminal interface as the layer's posix-platform and the terminal
+/// service's proto_tty have it: struct termios of Linux AArch64 (glibc's,
+/// 60 bytes: four flag words, the line, 32 control characters, two
+/// speeds) and the numbers of its flags, control characters and ioctl
+/// requests. Their const assertions say the same on the other side.
+const _: () = {
+    use crate::header::{sys_ioctl, termios};
+    assert!(mem::size_of::<termios::termios>() == 60);
+    assert!(mem::offset_of!(termios::termios, c_line) == 16);
+    assert!(mem::offset_of!(termios::termios, c_cc) == 17);
+    assert!(mem::offset_of!(termios::termios, __c_ispeed) == 52);
+    assert!(mem::offset_of!(termios::termios, __c_ospeed) == 56);
+    assert!(termios::NCCS == 32);
+    assert!(termios::VINTR == 0 && termios::VQUIT == 1 && termios::VERASE == 2);
+    assert!(termios::VKILL == 3 && termios::VEOF == 4 && termios::VTIME == 5);
+    assert!(termios::VMIN == 6 && termios::VSTART == 8 && termios::VSTOP == 9);
+    assert!(termios::VSUSP == 10 && termios::VEOL == 11 && termios::VWERASE == 14);
+    assert!(termios::ISTRIP == 0o40 && termios::INLCR == 0o100);
+    assert!(termios::IGNCR == 0o200 && termios::ICRNL == 0o400);
+    assert!(termios::OPOST == 1 && termios::ONLCR == 4 && termios::OCRNL == 0o10);
+    assert!(termios::ISIG == 1 && termios::ICANON == 2 && termios::ECHO == 0o10);
+    assert!(termios::ECHOE == 0o20 && termios::ECHOK == 0o40 && termios::ECHONL == 0o100);
+    assert!(termios::NOFLSH == 0o200 && termios::TOSTOP == 0o400);
+    assert!(termios::ECHOCTL == 0o1000 && termios::ECHOKE == 0o4000);
+    assert!(termios::IEXTEN == 0o100000);
+    assert!(termios::B38400 == 0o17 && termios::CS8 == 0o60 && termios::CREAD == 0o200);
+    assert!(termios::TCSANOW == 0 && termios::TCSADRAIN == 1 && termios::TCSAFLUSH == 2);
+    assert!(termios::TCOOFF == 0 && termios::TCOON == 1);
+    assert!(termios::TCIOFF == 2 && termios::TCION == 3);
+    assert!(termios::TCIFLUSH == 0 && termios::TCOFLUSH == 1 && termios::TCIOFLUSH == 2);
+    assert!(sys_ioctl::TCGETS == 0x5401 && sys_ioctl::TCSETS == 0x5402);
+    assert!(sys_ioctl::TCSETSW == 0x5403 && sys_ioctl::TCSETSF == 0x5404);
+    assert!(sys_ioctl::TCSBRK == 0x5409 && sys_ioctl::TCXONC == 0x540A);
+    assert!(sys_ioctl::TCFLSH == 0x540B);
+};
+
 /// The stafeto implementation of [`Pal`].
 pub struct Sys;
 
 impl Sys {
     pub unsafe fn ioctl(fd: c_int, request: c_ulong, out: *mut c_void) -> Result<c_int> {
         ret(unsafe { stafeto_ioctl(fd, request, out) } as isize).map(|v| v as c_int)
+    }
+
+    /// The name of the terminal `fd` is, into `out` (ttyname_r): its
+    /// length without the NUL; `out` has a byte beyond it for the NUL.
+    pub fn ttyname(fd: c_int, out: &mut [u8]) -> Result<usize> {
+        ret(unsafe { stafeto_ttyname(fd, out.as_mut_ptr(), out.len() + 1) }).map(|len| len as usize)
     }
 }
 

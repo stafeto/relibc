@@ -162,6 +162,18 @@ pub const ECHONL: usize = 0o000_100;
 pub const NOFLSH: usize = 0o000_200;
 /// Send `SIGTTOU` for background output.
 pub const TOSTOP: usize = 0o000_400;
+/// Non-POSIX, see <https://www.man7.org/linux/man-pages/man3/termios.3.html>.
+///
+/// Echo control characters as `^X`.
+pub const ECHOCTL: usize = 0o001_000;
+/// Non-POSIX, see <https://www.man7.org/linux/man-pages/man3/termios.3.html>.
+///
+/// Echo erased characters as they are erased (hardcopy terminals).
+pub const ECHOPRT: usize = 0o002_000;
+/// Non-POSIX, see <https://www.man7.org/linux/man-pages/man3/termios.3.html>.
+///
+/// Erase the whole line visually when KILL comes.
+pub const ECHOKE: usize = 0o004_000;
 /// Enable extended input character processing.
 pub const IEXTEN: usize = 0o100_000;
 /* } c_lflag */
