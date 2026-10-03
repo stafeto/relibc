@@ -2,7 +2,7 @@
 //!
 //! See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/stdlib.h.html>.
 
-use core::{convert::TryFrom, iter, mem, ptr, slice};
+use core::{convert::TryFrom, mem, ptr, slice};
 use rand::{
     RngExt, SeedableRng,
     distr::{Alphanumeric, Distribution, Uniform},
@@ -782,18 +782,26 @@ where
         }
     }
 
-    let mut rng = JitterRng::new_with_timer(get_nstime);
-    let _ = rng.test_timer();
+    // The names come from the system's generator; a platform without one
+    // (getrandom gives an error) keeps the clock's jitter.
+    let mut jitter = None;
 
     for _ in 0..100 {
-        let char_iter = iter::repeat(())
-            .map(|()| rng.sample(Alphanumeric))
-            .take(6)
-            .enumerate();
+        let mut chars = [0u8; 6];
+        if !random_alphanumerics(&mut chars) {
+            let rng = jitter.get_or_insert_with(|| {
+                let mut rng = JitterRng::new_with_timer(get_nstime);
+                let _ = rng.test_timer();
+                rng
+            });
+            for c in &mut chars {
+                *c = rng.sample(Alphanumeric);
+            }
+        }
         unsafe {
-            for (i, c) in char_iter {
+            for (i, c) in chars.iter().enumerate() {
                 *name.offset((len as isize) - (suffix_len as isize) - (i as isize) - 1) =
-                    c as c_char
+                    *c as c_char
             }
         }
 
@@ -805,6 +813,69 @@ where
     platform::ERRNO.set(errno::EEXIST);
 
     None
+}
+
+/// Fills `out` with letters and digits drawn from `getrandom`, each of the
+/// 62 equally likely (bytes from 248 up are dropped, 248 being a multiple
+/// of 62); false when the platform has no generator.
+fn random_alphanumerics(out: &mut [u8]) -> bool {
+    const SET: &[u8; 62] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut filled = 0;
+    while filled < out.len() {
+        let mut bytes = [0u8; 16];
+        if Sys::getrandom(&mut bytes, 0).is_err() {
+            return false;
+        }
+        for b in bytes {
+            if b < 248 && filled < out.len() {
+                out[filled] = SET[usize::from(b) % 62];
+                filled += 1;
+            }
+        }
+    }
+    true
+}
+
+/// A word of the system's generator. A process that has none cannot go on
+/// in safety, so the call ends it, as on OpenBSD.
+fn arc4random_fill(out: &mut [u8]) {
+    if Sys::getrandom(out, 0).map_or(true, |n| n != out.len()) {
+        unsafe { abort() };
+    }
+}
+
+/// See <https://man.openbsd.org/arc4random.3>.
+#[unsafe(no_mangle)]
+pub extern "C" fn arc4random() -> u32 {
+    let mut bytes = [0u8; 4];
+    arc4random_fill(&mut bytes);
+    u32::from_ne_bytes(bytes)
+}
+
+/// See <https://man.openbsd.org/arc4random.3>.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn arc4random_buf(buf: *mut c_void, nbytes: size_t) {
+    if nbytes != 0 {
+        arc4random_fill(unsafe { slice::from_raw_parts_mut(buf.cast::<u8>(), nbytes) });
+    }
+}
+
+/// See <https://man.openbsd.org/arc4random.3>.
+///
+/// A number below `upper_bound`, each equally likely: the words below
+/// 2^32 mod `upper_bound` are dropped.
+#[unsafe(no_mangle)]
+pub extern "C" fn arc4random_uniform(upper_bound: u32) -> u32 {
+    if upper_bound < 2 {
+        return 0;
+    }
+    let min = upper_bound.wrapping_neg() % upper_bound;
+    loop {
+        let r = arc4random();
+        if r >= min {
+            return r % upper_bound;
+        }
+    }
 }
 
 fn get_nstime() -> u64 {
