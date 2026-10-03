@@ -3,6 +3,10 @@ use crate::platform::types::c_int;
 /// Close the file descriptor upon execution of an `exec` family function and
 /// in the new process image created by `posix_spawn()` or `posix_spawnp()`.
 pub const FD_CLOEXEC: c_int = 0x8_0000;
+/// Close the file descriptor in the child process of a `fork` (POSIX 2024).
+/// Linux has none; the stafeto layer takes this value, which no other
+/// flag of a descriptor uses.
+pub const FD_CLOFORK: c_int = 0x100_0000;
 
 // Flags for capability based "at" functions {
 /// Use the current working directory to determine the target of relative file

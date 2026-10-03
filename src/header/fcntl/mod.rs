@@ -50,6 +50,10 @@ pub const F_OFD_SETLK: c_int = 37;
 pub const F_OFD_SETLKW: c_int = 38;
 /// Duplicate file descriptor with the close-on-exec flag `FD_CLOEXEC` set.
 pub const F_DUPFD_CLOEXEC: c_int = 1030;
+/// Duplicate file descriptor with the close-on-fork flag `FD_CLOFORK` set
+/// (POSIX 2024). Linux has none; the stafeto layer takes this value, which
+/// no other command uses.
+pub const F_DUPFD_CLOFORK: c_int = 1100;
 
 // Used for `l_type` to describe the type of lock {
 /// Shared or read lock.
@@ -116,7 +120,7 @@ pub unsafe extern "C" fn fcntl(fildes: c_int, cmd: c_int, mut __valist: ...) -> 
     // c_ulonglong
     let arg = match cmd {
         F_DUPFD | F_SETFD | F_SETFL | F_GETLK | F_SETLK | F_SETLKW | F_OFD_GETLK | F_OFD_SETLK
-        | F_OFD_SETLKW | F_DUPFD_CLOEXEC => unsafe { __valist.next_arg::<c_ulonglong>() },
+        | F_OFD_SETLKW | F_DUPFD_CLOEXEC | F_DUPFD_CLOFORK => unsafe { __valist.next_arg::<c_ulonglong>() },
         _ => 0,
     };
 

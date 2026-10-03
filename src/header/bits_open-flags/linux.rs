@@ -34,6 +34,10 @@ pub const O_DIRECTORY: c_int = 0o4_0000;
 pub const O_NOFOLLOW: c_int = 0o10_0000;
 /// Atomically set the `FD_CLOEXEC` flag on the new file desciptor.
 pub const O_CLOEXEC: c_int = 0x8_0000;
+/// Atomically set the `FD_CLOFORK` flag on the new file descriptor (POSIX
+/// 2024). Linux has none; the stafeto layer takes this value, which no
+/// other flag of open uses.
+pub const O_CLOFORK: c_int = 0o1_0000_0000;
 /// Non-POSIX, see <https://www.man7.org/linux/man-pages/man2/open.2.html>.
 ///
 /// Get a file descriptor to indicate a location in the filesystem tree and

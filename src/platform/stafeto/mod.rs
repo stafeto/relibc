@@ -111,19 +111,19 @@ unsafe extern "C" {
     fn stafeto_testcancel() -> c_int;
     fn stafeto_setcancelstate(state: c_int, old: *mut c_int) -> c_int;
     fn stafeto_setcanceltype(kind: c_int, old: *mut c_int) -> c_int;
-    /// posix_spawn of the program at `path` with `argv` and `envp`
-    /// (NULL-ended; null for none) and the attributes at `attributes`
-    /// (null for none): the child's PID.
-    /// execve of the program at `path` with `argv` and `envp`: it
-    /// returns only with the negated errno.
     /// fork by a full copy of the process: the child's PID, 0 in the
     /// child, or the negated errno.
     fn stafeto_fork() -> pid_t;
+    /// execve of the program at `path` with `argv` and `envp`: it
+    /// returns only with the negated errno.
     fn stafeto_exec(
         path: *const c_char,
         argv: *const *const c_char,
         envp: *const *const c_char,
     ) -> c_int;
+    /// posix_spawn of the program at `path` with `argv` and `envp`
+    /// (NULL-ended; null for none) and the attributes at `attributes`
+    /// (null for none): the child's PID.
     fn stafeto_spawn(
         path: *const c_char,
         argv: *const *const c_char,
