@@ -172,6 +172,9 @@ struct SpawnAction {
     path: *const c_char,
 }
 
+/// The most bytes one read of the layer gives (proto_fs::MAX_READ).
+const STAFETO_READ_MAX: usize = 1016;
+
 /// The version of the interface of the `stafeto_*` functions.
 const PLATFORM_INTERFACE: u64 = 12;
 
@@ -735,28 +738,36 @@ impl Pal for Sys {
     }
 
     unsafe fn readv(fildes: c_int, iov: *const iovec, iovcnt: c_int) -> Result<usize> {
-        // Each part in turn; a short read ends the call.
+        // One read, as read(2) makes it: what is there now, at most the
+        // layer's extent (proto_fs::MAX_READ), spread over the parts in
+        // order. A second read would wait on a pipe that held exactly what
+        // the first part took; POSIX gives a pipe's reader what is there.
         // POSIX: EINVAL for iovcnt outside 1..=IOV_MAX.
         if !(1..=1024).contains(&iovcnt) {
             return Err(Errno(EINVAL));
         }
         let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
-        let mut total = 0;
+        let total = parts.iter().fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
+        if let Some(first) = parts.iter().find(|p| p.iov_len > 0)
+            && first.iov_len >= total.min(STAFETO_READ_MAX)
+        {
+            // The first part takes all one read gives: no copy.
+            return ret(unsafe { stafeto_read(fildes, first.iov_base.cast(), first.iov_len) })
+                .map(|got| got as usize);
+        }
+        let mut bytes = [0u8; STAFETO_READ_MAX];
+        let want = total.min(bytes.len());
+        let got = ret(unsafe { stafeto_read(fildes, bytes.as_mut_ptr(), want) })? as usize;
+        let mut at = 0;
         for part in parts {
-            // An error after bytes moved gives the bytes; the next call
-            // meets the error.
-            let got = match ret(unsafe { stafeto_read(fildes, part.iov_base.cast(), part.iov_len) })
-            {
-                Ok(got) => got,
-                Err(_) if total > 0 => break,
-                Err(error) => return Err(error),
-            };
-            total += got as usize;
-            if (got as usize) < part.iov_len {
+            if at == got {
                 break;
             }
+            let n = part.iov_len.min(got - at);
+            unsafe { ptr::copy_nonoverlapping(bytes.as_ptr().add(at), part.iov_base.cast::<u8>(), n) };
+            at += n;
         }
-        Ok(total)
+        Ok(got)
     }
 
     fn readlinkat(dirfd: c_int, pathname: CStr, out: &mut [u8]) -> Result<usize> {
@@ -871,12 +882,30 @@ impl Pal for Sys {
     }
 
     unsafe fn writev(fildes: c_int, iov: *const iovec, iovcnt: c_int) -> Result<usize> {
-        // Each part in turn; a short write ends the call.
         // POSIX: EINVAL for iovcnt outside 1..=IOV_MAX.
         if !(1..=1024).contains(&iovcnt) {
             return Err(Errno(EINVAL));
         }
         let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
+        let total = parts.iter().fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
+        // Up to {PIPE_BUF} bytes go as one write: a pipe takes them whole,
+        // and no other writer's bytes come between the parts.
+        if parts.len() > 1 && total <= crate::header::limits::PIPE_BUF as usize {
+            let mut bytes = [0u8; crate::header::limits::PIPE_BUF as usize];
+            let mut at = 0;
+            for part in parts {
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        part.iov_base.cast::<u8>(),
+                        bytes.as_mut_ptr().add(at),
+                        part.iov_len,
+                    )
+                };
+                at += part.iov_len;
+            }
+            return ret(unsafe { stafeto_write(fildes, bytes.as_ptr(), at) }).map(|n| n as usize);
+        }
+        // Past it, each part in turn; a short write ends the call.
         let mut total = 0;
         for part in parts {
             // An error after bytes moved gives the bytes; the next call
