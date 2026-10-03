@@ -49,7 +49,7 @@ pub use crate::header::stdio::ctermid;
 pub use crate::header::stdio::cuserid;
 
 use super::{
-    errno::{E2BIG, EINVAL, ENOMEM},
+    errno::{E2BIG, EINTR, EINVAL, ENOMEM},
     stdio::snprintf,
 };
 
@@ -581,15 +581,24 @@ pub extern "C" fn getentropy(buffer: *mut c_void, length: size_t) -> c_int {
         // required by posix, also by linux to guarantee assert satisfied
         return Err(Errno(EINVAL)).or_minus_one_errno();
     }
-    Sys::getrandom(
-        unsafe { slice::from_raw_parts_mut(buffer.cast::<u8>(), length) },
-        0,
-    )
-    .map(|s| {
-        assert_eq!(s, length);
-        0
-    })
-    .or_minus_one_errno()
+    // POSIX has no EINTR for getentropy: a wait that a signal handler ended
+    // goes on.
+    loop {
+        match Sys::getrandom(
+            unsafe { slice::from_raw_parts_mut(buffer.cast::<u8>(), length) },
+            0,
+        ) {
+            Err(Errno(EINTR)) => continue,
+            result => {
+                return result
+                    .map(|s| {
+                        assert_eq!(s, length);
+                        0
+                    })
+                    .or_minus_one_errno();
+            }
+        }
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/geteuid.html>.

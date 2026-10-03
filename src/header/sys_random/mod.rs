@@ -22,6 +22,11 @@ pub const GRND_NONBLOCK: c_uint = 1;
 /// If this bit is set, then random bytes are drawn from the `random` source
 /// instead of the `urandom` source.
 pub const GRND_RANDOM: c_uint = 2;
+/// See <https://www.man7.org/linux/man-pages/man2/getrandom.2.html>.
+///
+/// Random bytes before the source is ready; on stafeto the call waits for
+/// it all the same.
+pub const GRND_INSECURE: c_uint = 4;
 
 /// See <https://www.man7.org/linux/man-pages/man2/getrandom.2.html>.
 ///

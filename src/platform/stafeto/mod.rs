@@ -49,6 +49,9 @@ unsafe extern "C" {
     /// pipe2: the read end and the write end of a new pipe of the pipe
     /// service into `fds` (O_NONBLOCK, O_CLOEXEC, O_CLOFORK).
     fn stafeto_pipe2(fds: *mut c_int, flags: c_int) -> c_int;
+    /// getrandom: `len` bytes of the process's generator, keyed by the
+    /// entropy service (GRND_NONBLOCK, GRND_RANDOM, GRND_INSECURE).
+    fn stafeto_getrandom(buf: *mut u8, len: usize, flags: c_uint) -> isize;
     /// The layer's ABI word (`PLATFORM_ABI`).
     static STAFETO_PLATFORM_ABI: u64;
     /// Attaches the calling thread, whose TCB is `tcb`, to the layer: its
@@ -187,7 +190,7 @@ fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 12;
+const PLATFORM_INTERFACE: u64 = 13;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -553,7 +556,8 @@ impl Pal for Sys {
     }
 
     fn getrandom(buf: &mut [u8], flags: c_uint) -> Result<usize> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_getrandom(buf.as_mut_ptr(), buf.len(), flags) })
+            .map(|n| n as usize)
     }
 
     fn getrlimit(resource: c_int, mut rlim: Out<rlimit>) -> Result<()> {
