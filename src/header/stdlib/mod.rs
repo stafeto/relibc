@@ -839,8 +839,14 @@ fn random_alphanumerics(out: &mut [u8]) -> bool {
 /// A word of the system's generator. A process that has none cannot go on
 /// in safety, so the call ends it, as on OpenBSD.
 fn arc4random_fill(out: &mut [u8]) {
-    if Sys::getrandom(out, 0).map_or(true, |n| n != out.len()) {
-        unsafe { abort() };
+    // A wait for the first seed that a signal handler ended goes on, as
+    // getentropy's does: arc4random has no way to fail.
+    loop {
+        match Sys::getrandom(out, 0) {
+            Err(Errno(EINTR)) => continue,
+            Ok(n) if n == out.len() => return,
+            _ => unsafe { abort() },
+        }
     }
 }
 
