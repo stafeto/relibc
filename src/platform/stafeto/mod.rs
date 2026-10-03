@@ -40,6 +40,7 @@ unsafe extern "C" {
     fn stafeto_read(fd: c_int, buf: *mut u8, len: usize) -> isize;
     fn stafeto_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn stafeto_close(fd: c_int) -> c_int;
+    fn stafeto_grantpt(fd: c_int) -> c_int;
     fn stafeto_lseek(fd: c_int, offset: off_t, whence: c_int) -> off_t;
     pub(crate) fn stafeto_exit(status: c_int) -> !;
     fn stafeto_clock_gettime(clock: clockid_t, out: *mut timespec) -> c_int;
@@ -414,6 +415,12 @@ const _: () = {
 pub struct Sys;
 
 impl Sys {
+    /// Assign the slave device's ownership through its master description.
+    pub fn grantpt(fd: c_int) -> Result<c_int> {
+        // SAFETY: the layer validates the descriptor; this call takes no pointers.
+        ret(unsafe { stafeto_grantpt(fd) } as isize).map(|value| value as c_int)
+    }
+
     /// Multiplexes descriptors directly through the layer's bounded watches.
     pub unsafe fn poll_direct(fds: *mut pollfd, count: nfds_t, timeout: c_int) -> Result<c_int> {
         ret(unsafe { stafeto_poll(fds, count, timeout) } as isize).map(|count| count as c_int)

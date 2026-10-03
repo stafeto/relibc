@@ -530,10 +530,18 @@ pub unsafe extern "C" fn getsubopt(
 /// Grants access to the subterm pseudo-terminal device.
 ///
 /// # Implementation
-/// This is a no-op and unconditionally returns 0 indicating success.
+/// stafeto validates the master descriptor and assigns the slave's ownership.
 #[unsafe(no_mangle)]
-pub extern "C" fn grantpt(_fildes: c_int) -> c_int {
-    0
+pub extern "C" fn grantpt(fildes: c_int) -> c_int {
+    #[cfg(stafeto)]
+    {
+        Sys::grantpt(fildes).or_minus_one_errno()
+    }
+    #[cfg(not(stafeto))]
+    {
+        let _ = fildes;
+        0
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/initstate.html>.
