@@ -116,6 +116,9 @@ unsafe extern "C" {
     /// (null for none): the child's PID.
     /// execve of the program at `path` with `argv` and `envp`: it
     /// returns only with the negated errno.
+    /// fork by a full copy of the process: the child's PID, 0 in the
+    /// child, or the negated errno.
+    fn stafeto_fork() -> pid_t;
     fn stafeto_exec(
         path: *const c_char,
         argv: *const *const c_char,
@@ -167,7 +170,7 @@ struct SpawnAction {
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 10;
+const PLATFORM_INTERFACE: u64 = 11;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -385,7 +388,7 @@ impl Pal for Sys {
     }
 
     unsafe fn fork() -> Result<pid_t> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_fork() } as isize).map(|pid| pid as pid_t)
     }
 
     fn fpath(fildes: c_int, out: &mut [u8]) -> Result<usize> {

@@ -464,7 +464,10 @@ pub extern "C" fn fdatasync(fildes: c_int) -> c_int {
 /// operation on the lock results in undefined behaviour.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fork() -> pid_t {
-    for prepare in unsafe { &fork_hooks[0] } {
+    // The prepare handlers run in the opposite order of their
+    // establishment, the parent and child handlers in that order (POSIX
+    // pthread_atfork).
+    for prepare in unsafe { &fork_hooks[0] }.iter().rev() {
         prepare();
     }
     let pid = unsafe { Sys::fork() }.or_minus_one_errno();
@@ -1425,14 +1428,14 @@ pub extern "C" fn vfork() -> pid_t {
 
 /// See <https://pubs.opengroup.org/onlinepubs/009695399/functions/vfork.html>.
 ///
-/// On stafeto vfork fails with ENOSYS until the platform has fork: a shell
-/// that tries it reports the error and goes on.
+/// On stafeto vfork is fork, with its handlers: the child gets a copy of
+/// the parent's memory and shares nothing of it, so whatever the child
+/// does before its exec or _exit leaves the parent as it was.
 #[deprecated]
 #[cfg(stafeto)]
 #[unsafe(no_mangle)]
 pub extern "C" fn vfork() -> pid_t {
-    platform::ERRNO.set(errno::ENOSYS);
-    -1
+    unsafe { fork() }
 }
 
 unsafe fn with_argv(
