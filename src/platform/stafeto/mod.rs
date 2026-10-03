@@ -46,6 +46,9 @@ unsafe extern "C" {
     fn stafeto_munmap(addr: *mut c_void, len: usize) -> c_int;
     fn stafeto_getpid() -> pid_t;
     fn stafeto_getppid() -> pid_t;
+    /// pipe2: the read end and the write end of a new pipe of the pipe
+    /// service into `fds` (O_NONBLOCK, O_CLOEXEC, O_CLOFORK).
+    fn stafeto_pipe2(fds: *mut c_int, flags: c_int) -> c_int;
     /// The layer's ABI word (`PLATFORM_ABI`).
     static STAFETO_PLATFORM_ABI: u64;
     /// Attaches the calling thread, whose TCB is `tcb`, to the layer: its
@@ -170,7 +173,7 @@ struct SpawnAction {
 }
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 11;
+const PLATFORM_INTERFACE: u64 = 12;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -687,8 +690,11 @@ impl Pal for Sys {
             .map(|v| v as c_int)
     }
 
-    fn pipe2(fildes: Out<[c_int; 2]>, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn pipe2(mut fildes: Out<[c_int; 2]>, flags: c_int) -> Result<()> {
+        let mut ends = [0; 2];
+        ret(unsafe { stafeto_pipe2(ends.as_mut_ptr(), flags) } as isize)?;
+        fildes.write(ends);
+        Ok(())
     }
 
     fn posix_fallocate(fd: c_int, offset: u64, length: NonZeroU64) -> Result<()> {

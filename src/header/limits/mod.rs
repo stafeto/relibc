@@ -159,8 +159,13 @@ pub const GETENTROPY_MAX: c_long = 256;
 /// Maximum number of links to a single file.
 pub const LINK_MAX: c_long = 127;
 /// Maximum number of bytes that is guaranteed to be atomic when writing to a
-/// pipe.
+/// pipe. The stafeto pipe service takes such a write in one message, at
+/// the minimum of POSIX ({_POSIX_PIPE_BUF}, `proto_pipe::ATOMIC`);
+/// limits.h defines the same value (cbindgen.toml).
+#[cfg(not(stafeto))]
 pub const PIPE_BUF: c_long = 4096;
+#[cfg(stafeto)]
+pub const PIPE_BUF: c_long = 512;
 /// Minimum number of bits needed to represent, as a signed integer value, the
 /// maximum size of a regular file allowed in the specified directory.
 pub const FILESIZEBITS: c_long = 64;
