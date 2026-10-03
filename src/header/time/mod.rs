@@ -94,6 +94,19 @@ static TIMEZONE_NAMES: Mutex<OnceCell<BTreeSet<CString>>> = Mutex::new(OnceCell:
 // user access (see `tzset()` specs for details).
 static TIMEZONE_LOCK: Mutex<(Option<CString>, Option<CString>)> = Mutex::new((None, None));
 
+/// fork on stafeto: the forking thread takes the lock of the time zone,
+/// and lets it go in the parent and the child.
+/// cbindgen:ignore
+#[cfg(stafeto)]
+pub(crate) fn fork_lock() {
+    unsafe { TIMEZONE_LOCK.manual_lock() };
+}
+/// cbindgen:ignore
+#[cfg(stafeto)]
+pub(crate) fn fork_unlock() {
+    unsafe { TIMEZONE_LOCK.manual_unlock() };
+}
+
 // Should only be accessed by relibc when `TIMEZONE_LOCK` is held
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/tzset.html>.
 #[unsafe(no_mangle)]

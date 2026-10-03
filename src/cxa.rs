@@ -18,6 +18,17 @@ struct CxaThreadAtExitFunc {
 }
 
 static CXA_ATEXIT_FUNCS: Mutex<Vec<Option<CxaAtExitFunc>>> = Mutex::new(Vec::new());
+
+/// fork on stafeto, in the child: the lock of the functions of exit is
+/// free again. It is a spin lock, which the forking thread may not wait
+/// for on one processor: a thread of the parent that held it is no thread
+/// of the child.
+#[cfg(stafeto)]
+pub(crate) fn fork_reset() {
+    if CXA_ATEXIT_FUNCS.is_locked() {
+        unsafe { CXA_ATEXIT_FUNCS.force_unlock() };
+    }
+}
 #[thread_local]
 static DTORS: RefCell<Vec<CxaThreadAtExitFunc>> = RefCell::new(Vec::new());
 

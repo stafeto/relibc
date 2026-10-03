@@ -93,8 +93,12 @@ pub use self::barrier::*;
 pub mod cond;
 pub use self::cond::*;
 
-#[thread_local]
+/// The handlers of pthread_atfork, the process's (every thread's fork runs
+/// them all), under FORK_HOOKS_LOCK.
 pub static mut fork_hooks: [LinkedList<extern "C" fn()>; 3] = [const { LinkedList::new() }; 3];
+/// Held while pthread_atfork adds a handler and through a fork, which
+/// reads them: the child lets its copy go.
+pub(crate) static FORK_HOOKS_LOCK: crate::sync::Mutex<()> = crate::sync::Mutex::new(());
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_cancel.html>.
 #[unsafe(no_mangle)]
@@ -146,6 +150,7 @@ pub extern "C" fn pthread_atfork(
     parent: Option<extern "C" fn()>,
     child: Option<extern "C" fn()>,
 ) -> c_int {
+    let _hooks = FORK_HOOKS_LOCK.lock();
     if let Some(prepare) = prepare {
         unsafe {
             fork_hooks[0].push_back(prepare);

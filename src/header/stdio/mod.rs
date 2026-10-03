@@ -327,6 +327,21 @@ impl WriteByte for FILE {
 }
 
 impl FILE {
+    /// The lock of the stream is free again, in a forked child (as glibc
+    /// does for its streams): a thread of the parent that held it is no
+    /// thread of the child.
+    #[cfg(stafeto)]
+    pub(crate) fn reset_lock_after_fork(&mut self) {
+        use crate::header::pthread::{PTHREAD_MUTEX_RECURSIVE, RlctMutexAttr};
+        const MUTEX_ATTR: RlctMutexAttr = RlctMutexAttr {
+            ty: PTHREAD_MUTEX_RECURSIVE,
+            ..RlctMutexAttr::default_const()
+        };
+        if let Ok(lock) = RlctMutex::new(&MUTEX_ATTR) {
+            self.lock = lock;
+        }
+    }
+
     pub fn lock(&mut self) -> LockGuard<'_> {
         unsafe {
             flockfile(self);

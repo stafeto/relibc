@@ -467,6 +467,7 @@ pub unsafe extern "C" fn fork() -> pid_t {
     // The prepare handlers run in the opposite order of their
     // establishment, the parent and child handlers in that order (POSIX
     // pthread_atfork).
+    unsafe { crate::header::pthread::FORK_HOOKS_LOCK.manual_lock() };
     for prepare in unsafe { &fork_hooks[0] }.iter().rev() {
         prepare();
     }
@@ -484,6 +485,7 @@ pub unsafe extern "C" fn fork() -> pid_t {
         }
         ERRNO.set(errno);
     }
+    unsafe { crate::header::pthread::FORK_HOOKS_LOCK.manual_unlock() };
     pid
 }
 

@@ -201,13 +201,50 @@ pub(crate) unsafe fn init() {
         );
         Sys::exit(125);
     }
-    // The first handlers of fork: the allocator's lock is the forking
-    // thread's, its prepare handler the last to run.
+    // The first handlers of fork, whose prepare handler runs after all
+    // others: relibc's own locks are the forking thread's across the copy.
     crate::header::pthread::pthread_atfork(
-        Some(crate::platform::fork_lock_allocator),
-        Some(crate::platform::fork_unlock_allocator),
-        Some(crate::platform::fork_unlock_allocator),
+        Some(fork_prepare),
+        Some(fork_parent),
+        Some(fork_child),
     );
+}
+
+/// fork's prepare handler: relibc's locks in a fixed order, that of their
+/// nesting elsewhere (each of them may call the allocator, whose lock
+/// comes last). The streams' locks are not taken: a thread may hold one
+/// through a read of the console with no end, and the child frees them.
+extern "C" fn fork_prepare() {
+    crate::header::pthread::tls::fork_lock();
+    crate::header::time::fork_lock();
+    crate::pthread::fork_lock();
+    crate::platform::fork_lock_allocator();
+}
+
+/// fork's parent handler: the locks of `fork_prepare` go, last first.
+extern "C" fn fork_parent() {
+    crate::platform::fork_unlock_allocator();
+    crate::pthread::fork_unlock_parent();
+    crate::header::time::fork_unlock();
+    crate::header::pthread::tls::fork_unlock();
+}
+
+/// fork's child handler: the locks of `fork_prepare` go, the table of
+/// threads keeps the child's one, and the spin lock of the functions of
+/// exit and the standard streams' locks are free (the threads that may
+/// have held them are the parent's).
+extern "C" fn fork_child() {
+    crate::platform::fork_unlock_allocator();
+    crate::pthread::fork_unlock_child();
+    crate::header::time::fork_unlock();
+    crate::header::pthread::tls::fork_unlock();
+    crate::cxa::fork_reset();
+    use crate::header::stdio;
+    for stream in unsafe { [stdio::stdin, stdio::stdout, stdio::stderr] } {
+        if let Some(stream) = unsafe { stream.as_mut() } {
+            stream.reset_lock_after_fork();
+        }
+    }
 }
 
 /// The stafeto layer returns a value or a negated errno.

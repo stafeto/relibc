@@ -29,6 +29,17 @@ static VALUES: RefCell<BTreeMap<pthread_key_t, Record>> = RefCell::new(BTreeMap:
 static KEYS: Mutex<BTreeMap<pthread_key_t, Dtor>> = Mutex::new(BTreeMap::new());
 static NEXTKEY: AtomicUsize = AtomicUsize::new(1);
 
+/// fork on stafeto: the forking thread takes the lock of the keys, and
+/// lets it go in the parent and the child.
+#[cfg(stafeto)]
+pub(crate) fn fork_lock() {
+    unsafe { KEYS.manual_lock() };
+}
+#[cfg(stafeto)]
+pub(crate) fn fork_unlock() {
+    unsafe { KEYS.manual_unlock() };
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_getspecific.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_getspecific(key: pthread_key_t) -> *mut c_void {

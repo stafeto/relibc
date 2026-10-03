@@ -505,6 +505,24 @@ pub fn get_sched_param(thread: &Pthread) -> Result<(clockid_t, sched_param), Err
 static OS_TID_TO_PTHREAD: Mutex<BTreeMap<OsTid, ForceSendSync<*mut Tcb>>> =
     Mutex::new(BTreeMap::new());
 
+/// fork on stafeto: the forking thread takes the lock of the table of
+/// threads, and lets it go in the parent; in the child, whose only thread
+/// is the forking one, the table keeps that thread alone.
+#[cfg(stafeto)]
+pub(crate) fn fork_lock() {
+    unsafe { OS_TID_TO_PTHREAD.manual_lock() };
+}
+#[cfg(stafeto)]
+pub(crate) fn fork_unlock_parent() {
+    unsafe { OS_TID_TO_PTHREAD.manual_unlock() };
+}
+#[cfg(stafeto)]
+pub(crate) fn fork_unlock_child() {
+    unsafe { OS_TID_TO_PTHREAD.manual_unlock() };
+    let own = Sys::current_os_tid();
+    OS_TID_TO_PTHREAD.lock().retain(|tid, _| *tid == own);
+}
+
 #[derive(Clone, Copy)]
 struct ForceSendSync<T>(T);
 unsafe impl<T> Send for ForceSendSync<T> {}
