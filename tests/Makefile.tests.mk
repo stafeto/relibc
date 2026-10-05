@@ -230,6 +230,7 @@ EXPECT_NAMES=\
 
 # Binaries that may generate varied output
 VARIED_NAMES=\
+	elf/layout \
 	dirent/main \
 	dirent/posix_getdents \
 	includes \
