@@ -40,6 +40,7 @@ unsafe extern "C" {
     fn stafeto_read(fd: c_int, buf: *mut u8, len: usize) -> isize;
     fn stafeto_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn stafeto_close(fd: c_int) -> c_int;
+    fn stafeto_ftruncate(fd: c_int, length: off_t) -> c_int;
     fn stafeto_grantpt(fd: c_int) -> c_int;
     fn stafeto_lseek(fd: c_int, offset: off_t, whence: c_int) -> off_t;
     pub(crate) fn stafeto_exit(status: c_int) -> !;
@@ -590,7 +591,7 @@ impl Pal for Sys {
     }
 
     fn ftruncate(fildes: c_int, length: off_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_ftruncate(fildes, length) } as isize).map(|_| ())
     }
 
     #[inline]
