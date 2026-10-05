@@ -50,6 +50,7 @@ prefix_with_name = true
 
 [export]
 include = [
+  "Elf64_Sword",
   "Elf32_Ehdr",
   "Elf64_Ehdr",
   "Elf32_Shdr",

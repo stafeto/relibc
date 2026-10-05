@@ -1,6 +1,14 @@
 #include <elf.h>
 #include <stddef.h>
 
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define ELF_NATIVE_DATA ELFDATA2MSB
+#define LOW_BYTE(n, width) ((n) + (width) - 1)
+#else
+#define ELF_NATIVE_DATA ELFDATA2LSB
+#define LOW_BYTE(n, width) (n)
+#endif
+
 /* ELF gABI, Table 1.2 and the ELF64 header layouts. */
 _Static_assert(sizeof(Elf64_Word) == 4, "ELF64 Word width");
 _Static_assert(sizeof(Elf64_Sword) == 4, "ELF64 Sword width");
@@ -42,7 +50,7 @@ int elf64_header_layout(const unsigned char *bytes, size_t length) {
     return header.e_ident[0] != 0x7f || header.e_ident[1] != 'E' ||
            header.e_ident[2] != 'L' || header.e_ident[3] != 'F' ||
            header.e_ident[EI_CLASS] != ELFCLASS64 ||
-           header.e_ident[EI_DATA] != ELFDATA2LSB || header.e_version != 1 ||
+           header.e_ident[EI_DATA] != ELF_NATIVE_DATA || header.e_version != 1 ||
            header.e_ehsize != sizeof(Elf64_Ehdr) ||
            header.e_phentsize != sizeof(Elf64_Phdr) || header.e_phnum == 0;
 }
@@ -50,8 +58,9 @@ int elf64_header_layout(const unsigned char *bytes, size_t length) {
 int main(void) {
     const unsigned char file[64] = {
         [0] = 0x7f, [1] = 'E', [2] = 'L', [3] = 'F',
-        [EI_CLASS] = ELFCLASS64, [EI_DATA] = ELFDATA2LSB,
-        [20] = 1, [52] = 64, [54] = 56, [56] = 7,
+        [EI_CLASS] = ELFCLASS64, [EI_DATA] = ELF_NATIVE_DATA,
+        [LOW_BYTE(20, 4)] = 1, [LOW_BYTE(52, 2)] = 64,
+        [LOW_BYTE(54, 2)] = 56, [LOW_BYTE(56, 2)] = 7,
     };
     return elf64_header_layout(file, sizeof(file));
 }
