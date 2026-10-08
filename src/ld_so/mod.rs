@@ -26,6 +26,8 @@ pub mod dso;
 pub mod linker;
 pub mod start;
 pub mod tcb;
+#[cfg(stafeto)]
+pub mod native_tcb;
 
 static mut STATIC_TCB_MASTER: Master = Master {
     ptr: ptr::null_mut(),
@@ -110,6 +112,9 @@ fn static_init(
             unsafe {
                 STATIC_TCB_MASTER.ptr = p_vaddr as *const u8;
                 STATIC_TCB_MASTER.image_size = p_filesz;
+                STATIC_TCB_MASTER.segment_size = p_memsz;
+                #[cfg(stafeto)]
+                native_tcb::record_align(p_align);
                 STATIC_TCB_MASTER.offset = valign;
 
                 let tcb = Tcb::new(vsize).expect("failed to allocate TCB");

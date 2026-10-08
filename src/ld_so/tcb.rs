@@ -100,14 +100,35 @@ impl Tcb {
         let (_abi_page, tls, tcb_page) = Self::os_new(size.next_multiple_of(page_size))?;
 
         let tcb_ptr = tcb_page.as_mut_ptr().cast::<Self>();
+        Self::initialize(
+            tcb_ptr,
+            tls.as_mut_ptr().add(tls.len()),
+            tls.len(),
+            tcb_page.len(),
+        );
+
+        Ok(&mut *tcb_ptr)
+    }
+
+    /// Initialize a complete TCB in exclusively owned storage without allocating.
+    ///
+    /// # Safety
+    /// The ranges are writable, aligned and disjoint, and remain owned by the caller.
+    #[expect(unsafe_op_in_unsafe_fn)]
+    pub(super) unsafe fn initialize(
+        tcb_ptr: *mut Self,
+        tls_end: *mut u8,
+        tls_len: usize,
+        tcb_len: usize,
+    ) {
         ptr::write(
             tcb_ptr,
             Self {
                 generic: GenericTcb {
-                    tls_end: tls.as_mut_ptr().add(tls.len()),
-                    tls_len: tls.len(),
+                    tls_end,
+                    tls_len,
                     tcb_ptr: tcb_ptr.cast(),
-                    tcb_len: tcb_page.len(),
+                    tcb_len,
                     os_specific: OsSpecific::default(),
                 },
                 masters_ptr: ptr::null_mut(),
@@ -129,8 +150,6 @@ impl Tcb {
                 dtv_len: 0,
             },
         );
-
-        Ok(&mut *tcb_ptr)
     }
 
     /// Get the current TCB
@@ -151,12 +170,12 @@ impl Tcb {
     }
 
     /// The initial images for TLS
-    pub fn masters(&self) -> Option<&'static mut [Master]> {
+    pub fn masters(&self) -> Option<&'static [Master]> {
         if self.masters_ptr.is_null() || self.masters_len == 0 {
             None
         } else {
             Some(unsafe {
-                slice::from_raw_parts_mut(
+                slice::from_raw_parts(
                     self.masters_ptr,
                     self.masters_len / mem::size_of::<Master>(),
                 )

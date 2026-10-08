@@ -244,6 +244,7 @@ pub(crate) unsafe fn init() {
         );
         Sys::exit(125);
     }
+    unsafe { crate::ld_so::native_tcb::publish() };
     let tcb = unsafe { Tcb::current() }.map_or(ptr::null_mut(), |tcb| ptr::from_mut(tcb).cast());
     if let Err(Errno(errno)) = ret(unsafe { stafeto_init(tcb) } as isize) {
         let _ = writeln!(

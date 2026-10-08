@@ -175,8 +175,14 @@ pub(crate) unsafe fn create(
     new_tcb.pthread.stack_base = stack_base;
     new_tcb.pthread.stack_size = stack_size;
 
-    new_tcb.masters_ptr = current_tcb.masters_ptr;
-    new_tcb.masters_len = current_tcb.masters_len;
+    // Native page-local metadata ends with the parent; static image masters
+    // remain valid through this child's independent lifetime.
+    #[cfg(stafeto)]
+    let (masters_ptr, masters_len) = crate::ld_so::native_tcb::child_masters(current_tcb);
+    #[cfg(not(stafeto))]
+    let (masters_ptr, masters_len) = (current_tcb.masters_ptr, current_tcb.masters_len);
+    new_tcb.masters_ptr = masters_ptr;
+    new_tcb.masters_len = masters_len;
     new_tcb.linker_ptr = current_tcb.linker_ptr;
 
     let stack_end = unsafe { stack_base.add(stack_size) };
