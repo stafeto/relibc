@@ -134,7 +134,14 @@ pub(crate) unsafe fn create(
     let synchronization_mutex = unsafe { Mutex::locked(current_sigmask) };
     let synchronization_mutex = &synchronization_mutex;
 
-    let stack_size = attrs.stacksize.next_multiple_of(Sys::getpagesize());
+    // A stack the application gave keeps its size: rounding it up to a page
+    // would start the thread beyond the end of the memory it was given.
+    // pthread_attr_setstack checked that both ends are 16-byte aligned.
+    let stack_size = if attrs.stack != 0 {
+        attrs.stacksize
+    } else {
+        attrs.stacksize.next_multiple_of(Sys::getpagesize())
+    };
 
     let stack_base = if attrs.stack != 0 {
         attrs.stack as *mut c_void

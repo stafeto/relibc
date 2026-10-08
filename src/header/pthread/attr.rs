@@ -446,7 +446,12 @@ pub unsafe extern "C" fn pthread_attr_setstack(
     stackaddr: *mut c_void,
     stacksize: size_t,
 ) -> c_int {
-    if stacksize as c_long >= PTHREAD_STACK_MIN {
+    // "EINVAL: stackaddr does not have proper alignment to be used as a
+    // stack, or stackaddr + stacksize lacks proper alignment": 16 bytes on
+    // AArch64, where the stack pointer must stay 16-byte aligned.
+    let aligned =
+        (stackaddr as usize) % 16 == 0 && (stackaddr as usize).wrapping_add(stacksize) % 16 == 0;
+    if stacksize as c_long >= PTHREAD_STACK_MIN && aligned {
         unsafe {
             (*attr.cast::<RlctAttr>()).stack = stackaddr as usize;
         }
