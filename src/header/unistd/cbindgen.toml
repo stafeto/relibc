@@ -25,21 +25,22 @@ after_includes = """
 
 // stafeto implements a subprofile of POSIX.1-2024: the option macros below
 // name what passes acceptance, and sysconf (sysconf/linux.rs) answers the
-// same. _POSIX_TIMERS waits for timer_create.
+// same. Left out until their functions work: _POSIX_TIMERS (timer_create),
+// _POSIX_SEMAPHORES (sem_open), _POSIX_SHARED_MEMORY_OBJECTS (MAP_SHARED),
+// and the XSI option (_XOPEN_UNIX, _XOPEN_VERSION, _XOPEN_SHM).
 #define _POSIX_SUBPROFILE 1
 #define _POSIX_VERSION 202405L
 #define _POSIX_BARRIERS 202405L
-#define _POSIX_MONOTONIC_CLOCK 200112L
+#define _POSIX_MONOTONIC_CLOCK 202405L
 #define _POSIX_REALTIME_SIGNALS 202405L
-#define _POSIX_SEMAPHORES 200112L
 #define _POSIX_SHELL 1
-#define _POSIX_SHARED_MEMORY_OBJECTS 200112L
+#define _POSIX_SPAWN 202405L
+#define _POSIX_JOB_CONTROL 1
+#define _POSIX_SAVED_IDS 1
 #define _POSIX_THREADS 202405L
 #define _POSIX_THREAD_ATTR_STACKADDR 202405L
 #define _POSIX_THREAD_ATTR_STACKSIZE 202405L
 #define _POSIX_TIMEOUTS 202405L
-#define _XOPEN_SHM 1
-#define _XOPEN_VERSION 700L
 """
 language = "C"
 style = "Tag"

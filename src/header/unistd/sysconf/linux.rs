@@ -137,17 +137,20 @@ const _XOPEN_VERSION: c_long = 700;
 fn stafeto_option(name: c_int) -> Option<c_long> {
     Some(match name {
         // Defined in unistd.h.
-        _SC_VERSION | _SC_2_VERSION => 202405,
+        _SC_VERSION => 202405,
         _SC_BARRIERS
+        | _SC_MONOTONIC_CLOCK
         | _SC_REALTIME_SIGNALS
+        | _SC_SPAWN
         | _SC_THREADS
         | _SC_THREAD_ATTR_STACKADDR
         | _SC_THREAD_ATTR_STACKSIZE
         | _SC_TIMEOUTS => 202405,
-        _SC_MONOTONIC_CLOCK | _SC_SEMAPHORES | _SC_SHARED_MEMORY_OBJECTS => 200112,
-        _SC_SHELL | _SC_XOPEN_SHM => 1,
+        _SC_JOB_CONTROL | _SC_SAVED_IDS | _SC_SHELL => 1,
         // Left out of unistd.h: the functions answer ENOSYS or ENOTSUP, or
-        // the platform has no such service.
+        // the platform has no such service. The XSI option is not claimed;
+        // the Shell and Utilities volume (_SC_2_VERSION) waits for the
+        // utilities of 5n.
         _SC_TIMERS
         | _SC_ASYNCHRONOUS_IO
         | _SC_FSYNC
@@ -156,11 +159,21 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_MEMLOCK_RANGE
         | _SC_MEMORY_PROTECTION
         | _SC_MESSAGE_PASSING
+        | _SC_SEMAPHORES
+        | _SC_SHARED_MEMORY_OBJECTS
         | _SC_THREAD_PRIORITY_SCHEDULING
         | _SC_THREAD_PROCESS_SHARED
         | _SC_ADVISORY_INFO
         | _SC_CPUTIME
-        | _SC_THREAD_CPUTIME => -1,
+        | _SC_THREAD_CPUTIME
+        | _SC_IPV6
+        | _SC_RAW_SOCKETS
+        | _SC_2_VERSION
+        | _SC_XOPEN_UNIX
+        | _SC_XOPEN_VERSION
+        | _SC_XOPEN_XCU_VERSION
+        | _SC_XOPEN_SHM
+        | _SC_XOPEN_ENH_I18N => -1,
         _ => return None,
     })
 }
