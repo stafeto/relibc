@@ -73,6 +73,9 @@ bitflags::bitflags! {
         /// its value and freeing itself (stafeto: the later of detach and
         /// that point frees it).
         const EXITED = 2;
+        /// The stack belongs to the application (pthread_attr_setstack):
+        /// the thread's end gives none of it back.
+        const APP_STACK = 4;
     }
 }
 
@@ -164,6 +167,9 @@ pub(crate) unsafe fn create(
     };
 
     let mut flags = PthreadFlags::empty();
+    if attrs.stack != 0 {
+        flags |= PthreadFlags::APP_STACK;
+    }
     match i32::from(attrs.detachstate) {
         header::PTHREAD_CREATE_DETACHED => flags |= PthreadFlags::DETACHED,
         header::PTHREAD_CREATE_JOINABLE => (),
@@ -171,10 +177,13 @@ pub(crate) unsafe fn create(
         other => unreachable!("unknown detachstate {}", other),
     }
 
-    let stack_raii = MmapGuard {
+    // Only a stack relibc mapped is its to unmap: the memory of an
+    // application stack stays the application's when creation fails
+    // (XSH 2.9.8).
+    let stack_raii = (attrs.stack == 0).then_some(MmapGuard {
         page_start: stack_base,
         mmap_size: stack_size,
-    };
+    });
 
     let current_tcb = unsafe { Tcb::current() }.expect("no TCB!");
     let new_tcb = unsafe { Tcb::new(current_tcb.tls_len) }.map_err(|_| Errno(ENOMEM))?;
@@ -219,6 +228,8 @@ pub(crate) unsafe fn create(
     }
 
     let Ok(os_tid) = (unsafe { Sys::rlct_clone(stack, &mut new_tcb.os_specific) }) else {
+        // The platform has freed the TCB: it takes it with rlct_clone and
+        // gives it up itself when no thread comes of it.
         return Err(Errno(EAGAIN));
     };
     core::mem::forget(stack_raii);
@@ -354,8 +365,8 @@ pub unsafe fn exit_current_thread(retval: Retval) -> ! {
     unsafe { header::tls::run_all_destructors() };
 
     let this = current_thread().expect("failed to obtain current thread when exiting");
-    let stack_base = this.stack_base;
-    let stack_size = this.stack_size;
+    let mut stack_base = this.stack_base;
+    let mut stack_size = this.stack_size;
 
     // No signal handler and no cancellation from here on: the thread runs
     // past its destructors, and its TCB is given away below.
@@ -378,6 +389,11 @@ pub unsafe fn exit_current_thread(retval: Retval) -> ! {
         .fetch_or(PthreadFlags::EXITED.bits(), Ordering::AcqRel);
     #[cfg(not(stafeto))]
     let flags = this.flags.load(Ordering::Acquire);
+    // A stack of the application is not unmapped by the thread's end.
+    if flags & PthreadFlags::APP_STACK.bits() != 0 {
+        stack_base = ptr::null_mut();
+        stack_size = 0;
+    }
     if flags & PthreadFlags::DETACHED.bits() != 0 {
         // When detached, the thread state no longer makes any sense, and can immediately be
         // deallocated.
