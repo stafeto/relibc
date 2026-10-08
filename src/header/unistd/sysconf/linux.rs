@@ -147,6 +147,9 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_THREAD_ATTR_STACKSIZE
         | _SC_TIMEOUTS => 202405,
         _SC_JOB_CONTROL | _SC_SAVED_IDS | _SC_SHELL => 1,
+        // The descriptor table of the layer holds 32 (`posix_fs::OPEN_MAX`),
+        // and poll refuses more elements than that with EINVAL.
+        _SC_OPEN_MAX => 32,
         // Left out of unistd.h: the functions answer ENOSYS or ENOTSUP, or
         // the platform has no such service. The XSI option is not claimed;
         // the Shell and Utilities volume (_SC_2_VERSION) waits for the
