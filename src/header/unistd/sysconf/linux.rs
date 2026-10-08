@@ -123,10 +123,53 @@ pub const _SC_MINSIGSTKSZ: c_int = 249;
 pub const _SC_SIGSTKSZ: c_int = 250;
 
 // Defined in unistd.h but we defined it in C
+#[cfg(not(stafeto))]
 const _POSIX_VERSION: c_long = 200809;
+#[cfg(stafeto)]
+const _POSIX_VERSION: c_long = 202405;
 const _XOPEN_VERSION: c_long = 700;
 
+/// The options of stafeto, as the macros of unistd.h (cbindgen.toml) define
+/// them: the value of a macro it defines, -1 for an option it leaves out
+/// because the platform does not pass acceptance for it yet. None for a
+/// name the generic table below answers.
+#[cfg(stafeto)]
+fn stafeto_option(name: c_int) -> Option<c_long> {
+    Some(match name {
+        // Defined in unistd.h.
+        _SC_VERSION | _SC_2_VERSION => 202405,
+        _SC_BARRIERS
+        | _SC_REALTIME_SIGNALS
+        | _SC_THREADS
+        | _SC_THREAD_ATTR_STACKADDR
+        | _SC_THREAD_ATTR_STACKSIZE
+        | _SC_TIMEOUTS => 202405,
+        _SC_MONOTONIC_CLOCK | _SC_SEMAPHORES | _SC_SHARED_MEMORY_OBJECTS => 200112,
+        _SC_SHELL | _SC_XOPEN_SHM => 1,
+        // Left out of unistd.h: the functions answer ENOSYS or ENOTSUP, or
+        // the platform has no such service.
+        _SC_TIMERS
+        | _SC_ASYNCHRONOUS_IO
+        | _SC_FSYNC
+        | _SC_MAPPED_FILES
+        | _SC_MEMLOCK
+        | _SC_MEMLOCK_RANGE
+        | _SC_MEMORY_PROTECTION
+        | _SC_MESSAGE_PASSING
+        | _SC_THREAD_PRIORITY_SCHEDULING
+        | _SC_THREAD_PROCESS_SHARED
+        | _SC_ADVISORY_INFO
+        | _SC_CPUTIME
+        | _SC_THREAD_CPUTIME => -1,
+        _ => return None,
+    })
+}
+
 pub(super) fn sysconf_impl(name: c_int) -> c_long {
+    #[cfg(stafeto)]
+    if let Some(value) = stafeto_option(name) {
+        return value;
+    }
     // Values from musl which we can assume is correct.
     match name {
         _SC_CLK_TCK => 100,
