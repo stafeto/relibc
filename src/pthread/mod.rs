@@ -180,7 +180,7 @@ pub(crate) unsafe fn create(
     // Only a stack relibc mapped is its to unmap: the memory of an
     // application stack stays the application's when creation fails
     // (XSH 2.9.8).
-    let stack_raii = (attrs.stack == 0).then_some(MmapGuard {
+    let stack_raii = (attrs.stack == 0).then(|| MmapGuard {
         page_start: stack_base,
         mmap_size: stack_size,
     });
