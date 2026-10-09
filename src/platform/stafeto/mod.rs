@@ -175,6 +175,42 @@ unsafe extern "C" {
     /// setpgid, setsid, getpgid and getsid: the value (0 for setpgid), or
     /// the negated errno.
     fn stafeto_setpgid(pid: pid_t, pgid: pid_t) -> c_int;
+    /// The operations on names and metadata, the `*at` forms of Linux: 0 or
+    /// the negated errno.
+    fn stafeto_unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int;
+    fn stafeto_mkdirat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int;
+    fn stafeto_faccessat(dirfd: c_int, path: *const c_char, mode: c_int, flags: c_int) -> c_int;
+    fn stafeto_renameat(
+        old_dirfd: c_int,
+        old: *const c_char,
+        new_dirfd: c_int,
+        new: *const c_char,
+    ) -> c_int;
+    fn stafeto_linkat(
+        old_dirfd: c_int,
+        old: *const c_char,
+        new_dirfd: c_int,
+        new: *const c_char,
+        flags: c_int,
+    ) -> c_int;
+    fn stafeto_symlinkat(target: *const c_char, new_dirfd: c_int, linkpath: *const c_char)
+    -> c_int;
+    /// The bytes of the link (no NUL), or the negated errno.
+    fn stafeto_readlinkat(dirfd: c_int, path: *const c_char, buf: *mut u8, len: usize) -> isize;
+    fn stafeto_fchmodat(dirfd: c_int, path: *const c_char, mode: mode_t, flags: c_int) -> c_int;
+    fn stafeto_fchownat(
+        dirfd: c_int,
+        path: *const c_char,
+        uid: uid_t,
+        gid: gid_t,
+        flags: c_int,
+    ) -> c_int;
+    fn stafeto_utimensat(
+        dirfd: c_int,
+        path: *const c_char,
+        times: *const timespec,
+        flags: c_int,
+    ) -> c_int;
     fn stafeto_setsid() -> c_int;
     fn stafeto_getpgid(pid: pid_t) -> c_int;
     fn stafeto_getsid(pid: pid_t) -> c_int;
@@ -473,7 +509,7 @@ impl Sys {
 
 impl Pal for Sys {
     fn faccessat(fd: c_int, path: CStr, amode: c_int, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_faccessat(fd, path.as_ptr(), amode, flags) } as isize).map(|_| ())
     }
 
     unsafe fn brk(addr: *mut c_void) -> Result<*mut c_void> {
@@ -486,7 +522,8 @@ impl Pal for Sys {
     }
 
     fn fchownat(fildes: c_int, path: CStr, owner: uid_t, group: gid_t, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_fchownat(fildes, path.as_ptr(), owner, group, flags) } as isize)
+            .map(|_| ())
     }
 
     fn clock_getres(clk_id: clockid_t, res: Option<Out<timespec>>) -> Result<()> {
@@ -550,12 +587,9 @@ impl Pal for Sys {
         Err(Errno(ENOSYS))
     }
 
-    fn fchmod(fildes: c_int, mode: mode_t) -> Result<()> {
-        Err(Errno(ENOSYS))
-    }
-
     fn fchmodat(dirfd: c_int, path: Option<CStr>, mode: mode_t, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        let path = path.map_or(ptr::null(), |path| path.as_ptr());
+        ret(unsafe { stafeto_fchmodat(dirfd, path, mode, flags) } as isize).map(|_| ())
     }
 
     fn fdatasync(fildes: c_int) -> Result<()> {
@@ -620,7 +654,7 @@ impl Pal for Sys {
         times: *const timespec,
         flag: c_int,
     ) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_utimensat(dirfd, path.as_ptr(), times, flag) } as isize).map(|_| ())
     }
 
     fn getcwd(mut buf: Out<[u8]>) -> Result<()> {
@@ -731,7 +765,8 @@ impl Pal for Sys {
     }
 
     fn linkat(fd1: c_int, path1: CStr, fd2: c_int, path2: CStr, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_linkat(fd1, path1.as_ptr(), fd2, path2.as_ptr(), flags) } as isize)
+            .map(|_| ())
     }
 
     fn lseek(fildes: c_int, offset: off_t, whence: c_int) -> Result<off_t> {
@@ -739,7 +774,7 @@ impl Pal for Sys {
     }
 
     fn mkdirat(dir_fildes: c_int, path: CStr, mode: mode_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_mkdirat(dir_fildes, path.as_ptr(), mode) } as isize).map(|_| ())
     }
 
     fn mknodat(dir_fildes: c_int, path: CStr, mode: mode_t, dev: dev_t) -> Result<()> {
@@ -920,7 +955,8 @@ impl Pal for Sys {
     }
 
     fn readlinkat(dirfd: c_int, pathname: CStr, out: &mut [u8]) -> Result<usize> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_readlinkat(dirfd, pathname.as_ptr(), out.as_mut_ptr(), out.len()) })
+            .map(|len| len as usize)
     }
 
     fn renameat2(
@@ -930,7 +966,15 @@ impl Pal for Sys {
         new_path: CStr,
         flags: c_uint,
     ) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The flags of renameat2 (RENAME_NOREPLACE and the others) are not
+        // taken.
+        if flags != 0 {
+            return Err(Errno(EINVAL));
+        }
+        ret(unsafe {
+            stafeto_renameat(old_dir, old_path.as_ptr(), new_dir, new_path.as_ptr())
+        } as isize)
+        .map(|_| ())
     }
 
     fn sched_yield() -> Result<()> {
@@ -962,7 +1006,7 @@ impl Pal for Sys {
     }
 
     fn symlinkat(path1: CStr, fd: c_int, path2: CStr) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_symlinkat(path1.as_ptr(), fd, path2.as_ptr()) } as isize).map(|_| ())
     }
 
     fn sync() -> Result<()> {
@@ -999,7 +1043,7 @@ impl Pal for Sys {
     }
 
     fn unlinkat(fd: c_int, path: CStr, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_unlinkat(fd, path.as_ptr(), flags) } as isize).map(|_| ())
     }
 
     fn waitpid(pid: pid_t, stat_loc: Option<Out<c_int>>, options: c_int) -> Result<pid_t> {
