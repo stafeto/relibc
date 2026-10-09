@@ -1291,7 +1291,23 @@ pub unsafe extern "C" fn putw(w: c_int, stream: *mut FILE) -> c_int {
 pub unsafe extern "C" fn remove(path: *const c_char) -> c_int {
     let path = unsafe { CStr::from_ptr(path) };
     Sys::unlink(path)
-        .or_else(|_err| Sys::rmdir(path))
+        .or_else(|error| {
+            // A directory is removed with rmdir. Any other failure of unlink
+            // (a name that does not exist, a sticky directory of another
+            // owner, a file in a directory without write permission) is the
+            // answer of remove.
+            let refused_directory = error.0 == errno::EPERM || error.0 == errno::EISDIR;
+            let mut info = crate::header::sys_stat::stat::default();
+            let is_directory = refused_directory
+                && Sys::lstat(path, Out::from_mut(&mut info)).is_ok()
+                && info.st_mode & crate::header::sys_stat::S_IFMT
+                    == crate::header::sys_stat::S_IFDIR;
+            if is_directory {
+                Sys::rmdir(path)
+            } else {
+                Err(error)
+            }
+        })
         .map(|()| 0)
         .or_minus_one_errno()
 }
