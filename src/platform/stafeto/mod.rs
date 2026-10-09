@@ -121,12 +121,25 @@ unsafe extern "C" {
     fn stafeto_clock_settime(clock: clockid_t, time: *const timespec) -> c_int;
     fn stafeto_dup(fd: c_int) -> c_int;
     fn stafeto_dup2(fd: c_int, target: c_int) -> c_int;
+    /// dup3 with O_CLOEXEC and O_CLOFORK in `flags`.
+    fn stafeto_dup3(fd: c_int, target: c_int, flags: c_int) -> c_int;
     /// fstat (path null), stat and lstat in Linux's struct stat.
     fn stafeto_fstatat(fd: c_int, path: *const c_char, out: *mut stat, flags: c_int) -> c_int;
     fn stafeto_fcntl(fd: c_int, command: c_int, argument: c_ulonglong) -> c_int;
     fn stafeto_getcwd(buf: *mut u8, len: usize) -> c_int;
     /// Linux dirent64 records of the directory `fd` from position `off`.
     fn stafeto_getdents(fd: c_int, buf: *mut u8, len: usize, off: u64) -> isize;
+    /// posix_getdents: the records of the directory from the descriptor's
+    /// offset, which moves past them: the bytes, 0 at the end.
+    fn stafeto_posix_getdents(fd: c_int, buf: *mut u8, len: usize) -> isize;
+    /// The file system of a descriptor or of a path, as relibc's struct
+    /// statvfs.
+    fn stafeto_fstatvfs(fd: c_int, out: *mut statvfs) -> c_int;
+    fn stafeto_statvfs(path: *const c_char, out: *mut statvfs) -> c_int;
+    /// The current directory becomes the directory of the descriptor.
+    fn stafeto_fchdir(fd: c_int) -> c_int;
+    /// The canonical path of `path` into `buf` with its NUL: its length.
+    fn stafeto_realpath(path: *const c_char, buf: *mut u8, len: usize) -> isize;
     fn stafeto_getuid() -> uid_t;
     fn stafeto_geteuid() -> uid_t;
     fn stafeto_getgid() -> gid_t;
@@ -576,6 +589,10 @@ impl Pal for Sys {
         Err(Errno(ENOSYS))
     }
 
+    fn dup3(fildes: c_int, fildes2: c_int, flag: c_int) -> Result<c_int> {
+        ret(unsafe { stafeto_dup3(fildes, fildes2, flag) } as isize).map(|v| v as c_int)
+    }
+
     fn exit(status: c_int) -> ! {
         unsafe { stafeto_exit(status) }
     }
@@ -584,7 +601,7 @@ impl Pal for Sys {
     }
 
     fn fchdir(fildes: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_fchdir(fildes) } as isize).map(|_| ())
     }
 
     fn fchmodat(dirfd: c_int, path: Option<CStr>, mode: mode_t, flags: c_int) -> Result<()> {
@@ -605,8 +622,16 @@ impl Pal for Sys {
         ret(unsafe { stafeto_fstatat(fildes, path, buf.as_mut_ptr(), flags) } as isize).map(|_| ())
     }
 
-    fn fstatvfs(fildes: c_int, buf: Out<statvfs>) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn fstatvfs(fildes: c_int, mut buf: Out<statvfs>) -> Result<()> {
+        ret(unsafe { stafeto_fstatvfs(fildes, buf.as_mut_ptr()) } as isize).map(|_| ())
+    }
+
+    fn statvfs(path: CStr, mut buf: Out<statvfs>) -> Result<()> {
+        ret(unsafe { stafeto_statvfs(path.as_ptr(), buf.as_mut_ptr()) } as isize).map(|_| ())
+    }
+
+    fn realpath(path: CStr, out: &mut [u8]) -> Result<()> {
+        ret(unsafe { stafeto_realpath(path.as_ptr(), out.as_mut_ptr(), out.len()) }).map(|_| ())
     }
 
     fn fcntl(fildes: c_int, cmd: c_int, arg: c_ulonglong) -> Result<c_int> {
@@ -882,7 +907,8 @@ impl Pal for Sys {
     }
 
     fn posix_getdents(fildes: c_int, buf: &mut [u8]) -> Result<usize> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_posix_getdents(fildes, buf.as_mut_ptr(), buf.len()) })
+            .map(|used| used as usize)
     }
 
     unsafe fn rlct_clone(
