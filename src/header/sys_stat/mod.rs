@@ -5,7 +5,7 @@
 use crate::{
     c_str::CStr,
     error::ResultExt,
-    header::{fcntl::AT_SYMLINK_NOFOLLOW, time::timespec},
+    header::time::timespec,
     out::Out,
     platform::{
         Pal, Sys,
@@ -331,12 +331,7 @@ pub unsafe extern "C" fn utimensat(
     flag: c_int,
 ) -> c_int {
     let path = unsafe { CStr::from_ptr(path) };
-    match Sys::openat(fd, path, flag & AT_SYMLINK_NOFOLLOW, 0) {
-        Ok(fd) => unsafe {
-            let r = Sys::futimens(fd, times).map(|()| 0).or_minus_one_errno();
-            let _ = Sys::close(fd);
-            r
-        },
-        r => r.or_minus_one_errno(),
-    }
+    unsafe { Sys::utimensat(fd, path, times, flag) }
+        .map(|()| 0)
+        .or_minus_one_errno()
 }
