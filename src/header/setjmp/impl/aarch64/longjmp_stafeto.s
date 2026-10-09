@@ -44,7 +44,9 @@ longjmp:
 	ldp d12, d13, [x0,#144]
 	ldp d14, d15, [x0,#160]
 
-	mov x0, x1
-	cbnz x1, 2f
-	mov x0, #1
+	// val is an int: the upper half of x1 is undefined (AAPCS64), so the
+	// test and the move use w1; setjmp returns 1 for a val of 0.
+	mov w0, w1
+	cbnz w1, 2f
+	mov w0, #1
 2:	br x30
