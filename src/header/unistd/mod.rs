@@ -1312,8 +1312,9 @@ pub extern "C" fn tcsetpgrp(fildes: c_int, pgid_id: pid_t) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn truncate(path: *const c_char, length: off_t) -> c_int {
     let file = unsafe { CStr::from_ptr(path) };
-    // TODO: Rustify
-    let fd = Sys::open(file, fcntl::O_WRONLY, 0).or_minus_one_errno();
+    // The descriptor is internal: no controlling terminal, no inheritance.
+    let fd = Sys::open(file, fcntl::O_WRONLY | fcntl::O_NOCTTY | fcntl::O_CLOEXEC, 0)
+        .or_minus_one_errno();
     if fd < 0 {
         return -1;
     }
