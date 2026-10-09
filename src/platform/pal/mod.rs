@@ -162,6 +162,14 @@ pub trait Pal {
     /// Platform implementation of [`fstatvfs()`](crate::header::sys_statvfs::fstatvfs) from [`sys/statvfs.h`](crate::header::sys_statvfs).
     fn fstatvfs(fildes: c_int, buf: Out<statvfs>) -> Result<()>;
 
+    /// Platform implementation of [`statvfs()`](crate::header::sys_statvfs::statvfs) from [`sys/statvfs.h`](crate::header::sys_statvfs).
+    ///
+    /// By default `fstatvfs` of a descriptor opened with `O_PATH`.
+    fn statvfs(path: CStr, buf: Out<statvfs>) -> Result<()> {
+        let file = File::open(path, O_PATH)?;
+        Self::fstatvfs(*file, buf)
+    }
+
     /// Platform implementation of [`fcntl()`](crate::header::fcntl::fcntl) from [`fcntl.h`](crate::header::fcntl).
     fn fcntl(fildes: c_int, cmd: c_int, arg: c_ulonglong) -> Result<c_int>;
 

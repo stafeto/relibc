@@ -5,7 +5,6 @@
 use crate::{
     c_str::CStr,
     error::ResultExt,
-    header::fcntl::O_PATH,
     out::Out,
     platform::{
         Pal, Sys,
@@ -44,15 +43,5 @@ pub unsafe extern "C" fn fstatvfs(fildes: c_int, buf: *mut statvfs) -> c_int {
 pub unsafe extern "C" fn statvfs(file: *const c_char, buf: *mut statvfs) -> c_int {
     let file = unsafe { CStr::from_ptr(file) };
     let buf = unsafe { Out::nonnull(buf) };
-    // TODO: Rustify
-    let fd = Sys::open(file, O_PATH, 0).or_minus_one_errno();
-    if fd < 0 {
-        return -1;
-    }
-
-    let res = Sys::fstatvfs(fd, buf).map(|()| 0).or_minus_one_errno();
-
-    if let Ok(()) = Sys::close(fd) {}; // TODO handle error
-
-    res
+    Sys::statvfs(file, buf).map(|()| 0).or_minus_one_errno()
 }
