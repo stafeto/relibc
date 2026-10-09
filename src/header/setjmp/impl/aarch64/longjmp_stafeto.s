@@ -8,6 +8,10 @@ longjmp:
 	// frame of a live resident call of the entry distributor. A jump to a
 	// stack pointer above that frame abandons the call: clear the word.
 	// A target at the frame or below it keeps the word. x9-x11 are free.
+	// When a nested entry left the handler of the program to the abandoned
+	// entry (word `owed`), the request that entry spent goes back to the
+	// kernel: thread_upcall_request on the handle in word `thread`. The
+	// call changes x0-x11 only, so the arguments wait in x12 and x13.
 	mrs x9, tpidrro_el0
 	ldr x10, [x9, #{outer}]
 	cbz x10, 1f
@@ -15,6 +19,16 @@ longjmp:
 	cmp x11, x10
 	b.ls 1f
 	str xzr, [x9, #{outer}]
+	ldr x10, [x9, #{owed}]
+	cbz x10, 1f
+	str xzr, [x9, #{owed}]
+	ldr x10, [x9, #{thread}]
+	mov x12, x0
+	mov x13, x1
+	mov x0, x10
+	svc #33
+	mov x0, x12
+	mov x1, x13
 1:
 	// IHI0055B_aapcs64.pdf 5.1.1, 5.1.2 callee saved registers
 	ldp x19, x20, [x0,#0]

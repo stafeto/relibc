@@ -42,33 +42,42 @@ longjmp_specific! {
 
 /// The entry record of a thread on stafeto (the kernel's message buffer
 /// of the thread, whose address TPIDRRO_EL0 holds): its offset and the
-/// offset of the word `outer` in it. The long jump clears that word when it
-/// leaves a live resident call of the entry distributor of rt. The numbers
-/// are those of abi::msgbuf in the stafeto repository; the layer asks for them
-/// at the start of a process (`relibc_stafeto_entries_layout_v1`) and ends
-/// the process when they differ.
+/// offsets of three words in it. The long jump clears `outer` when it
+/// leaves a live resident call of the entry distributor of rt; when `owed`
+/// is set it also gives the request back to the kernel through the handle
+/// in `thread`. The numbers are those of abi::msgbuf and of the `entries`
+/// package in the stafeto repository; the layer asks for them at the start
+/// of a process (`relibc_stafeto_entries_layout_v2`) and ends the process
+/// when they differ.
 #[cfg(all(stafeto, target_arch = "aarch64"))]
 mod entries {
     pub const BASE: usize = 1936;
     pub const OUTER: usize = BASE + 24;
+    pub const OWED: usize = BASE + 48;
+    pub const THREAD: usize = BASE + 56;
 }
 
 #[cfg(all(stafeto, target_arch = "aarch64"))]
 global_asm!(
     include_str!("impl/aarch64/longjmp_stafeto.s"),
     outer = const entries::OUTER,
+    owed = const entries::OWED,
+    thread = const entries::THREAD,
 );
 
-/// Writes the offset of the entry record and the offset of its word
-/// `outer` to `out[0]` and `out[1]`; the layer compares them with its own.
+/// Writes the offset of the entry record and the offsets of its words
+/// `outer`, `owed` and `thread` to `out[0]` to `out[3]`; the layer compares
+/// them with its own.
 /// # Safety
-/// `out` points to two writable usize words.
+/// `out` points to four writable usize words.
 #[cfg(all(stafeto, target_arch = "aarch64"))]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn relibc_stafeto_entries_layout_v1(out: *mut usize) {
+pub unsafe extern "C" fn relibc_stafeto_entries_layout_v2(out: *mut usize) {
     unsafe {
         out.write(entries::BASE);
         out.add(1).write(entries::OUTER);
+        out.add(2).write(entries::OWED);
+        out.add(3).write(entries::THREAD);
     }
 }
 
