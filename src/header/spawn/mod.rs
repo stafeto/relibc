@@ -10,15 +10,10 @@ pub use spawn_attr::{Flags, posix_spawnattr_t};
 
 use crate::{
     c_str::CStr,
-    casting::U8PtrToCCharPtr,
-    header::{
-        errno,
-        stdlib::getenv,
-        unistd::{F_OK, path::PathSearchIter},
-    },
+    header::{errno, stdlib::getenv},
     iter::NulTerminated,
     platform::{
-        self, Pal, Sys,
+        self, Pal,
         types::{c_char, c_int, pid_t},
     },
 };
@@ -114,27 +109,33 @@ pub unsafe extern "C" fn posix_spawnp(
     if program.contains(b'/') {
         return unsafe { posix_spawn(pid, file, file_actions, attrp, argv, envp) };
     }
-    let path_env = unsafe { getenv(c"PATH".as_ptr()) };
-    if path_env.is_null() {
-        return errno::ENOENT;
-    }
-    let path_env = unsafe { CStr::from_ptr(path_env) };
-    for program_buf in PathSearchIter::new(program.to_bytes(), &path_env) {
-        // SAFETY: CStr::from_ptr().to_bytes() always stop at null, no need to check again
-        let program_c = unsafe { CStr::from_bytes_with_nul_unchecked(program_buf.as_slice()) };
-        if Sys::access(program_c, F_OK).is_err() {
-            continue;
+    let argv = {
+        if argv.is_null() || unsafe { (*argv).is_null() } {
+            return errno::EINVAL;
         }
-        return unsafe {
-            posix_spawn(
-                pid,
-                U8PtrToCCharPtr::cast_mut(program_buf.as_ptr()),
-                file_actions,
-                attrp,
-                argv,
-                envp,
-            )
-        };
+
+        unsafe { NulTerminated::new(argv).unwrap() }
+    };
+    let envp = unsafe { NulTerminated::new(envp) };
+    let path_env = unsafe { getenv(c"PATH".as_ptr()) };
+    let path_env = (!path_env.is_null()).then(|| unsafe { CStr::from_ptr(path_env) });
+
+    match unsafe {
+        platform::Sys::spawnp(
+            program,
+            path_env,
+            file_actions.as_ref(),
+            attrp.as_ref(),
+            argv,
+            envp,
+        )
+    } {
+        Ok(v) => {
+            if let Some(pid) = unsafe { pid.as_mut() } {
+                *pid = v;
+            }
+            0
+        }
+        Err(e) => e.0,
     }
-    errno::ENOENT
 }

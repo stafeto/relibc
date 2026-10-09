@@ -486,6 +486,37 @@ pub trait Pal {
         envp: Option<NulTerminated<*mut c_char>>,
     ) -> Result<pid_t>;
 
+    /// Platform implementation of [`posix_spawnp()`](crate::header::spawn::posix_spawnp)
+    /// for a `file` with no slash; `path` is the value of `PATH`.
+    ///
+    /// By default the first file in the directories of `path` that exists
+    /// (a search made in the process of the caller, before the file
+    /// actions) is spawned with `spawn`. A platform whose file actions
+    /// change the current directory searches after them.
+    unsafe fn spawnp(
+        file: CStr,
+        path: Option<CStr>,
+        fac: Option<&crate::header::spawn::posix_spawn_file_actions_t>,
+        fat: Option<&crate::header::spawn::posix_spawnattr_t>,
+        argv: NulTerminated<*mut c_char>,
+        envp: Option<NulTerminated<*mut c_char>>,
+    ) -> Result<pid_t> {
+        use crate::header::{
+            errno::ENOENT,
+            unistd::{F_OK, path::PathSearchIter},
+        };
+        let path = path.ok_or(Errno(ENOENT))?;
+        for program_buf in PathSearchIter::new(file.to_bytes(), &path) {
+            // SAFETY: the buffer ends with the NUL the iterator wrote.
+            let program = unsafe { CStr::from_bytes_with_nul_unchecked(program_buf.as_slice()) };
+            if Self::access(program, F_OK).is_err() {
+                continue;
+            }
+            return unsafe { Self::spawn(program, fac, fat, argv, envp) };
+        }
+        Err(Errno(ENOENT))
+    }
+
     /// Platform implementation of [`symlink()`](crate::header::unistd::symlink) from [`unistd.h`](crate::header::unistd).
     fn symlink(path1: CStr, path2: CStr) -> Result<()> {
         Self::symlinkat(path1, AT_FDCWD, path2)
