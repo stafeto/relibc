@@ -43,4 +43,17 @@ int main(void) {
         printf("errno is not 0 (%d), something went wrong\n", errno);
     }
     printf("endptr \"%s\"\n", endptr);
+
+    printf("%lo\n", strtoul("600", &endptr, 8));
+    printf("endptr \"%s\"\n", endptr);
+    printf("%lo\n", strtoul("0600", &endptr, 8));
+    printf("endptr \"%s\"\n", endptr);
+    printf("%lo\n", strtoul("0", &endptr, 8));
+    printf("endptr \"%s\"\n", endptr);
+    printf("%lo\n", strtoul("755x", &endptr, 8));
+    printf("endptr \"%s\"\n", endptr);
+    errno = 0;
+    printf("%lo\n", strtoul("8", &endptr, 8));
+    printf("errno %d\n", errno);
+    printf("endptr \"%s\"\n", endptr);
 }

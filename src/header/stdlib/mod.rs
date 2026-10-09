@@ -1516,21 +1516,11 @@ pub fn detect_base(s: CStr) -> Option<(c_int, CStr)> {
     })
 }
 
+/// In base 8 the prefix `0` is optional, so a leading zero is an ordinary
+/// digit: "600" and "0600" both give 384, and "0x" gives 0 with the end
+/// pointer after the zero.
 pub fn convert_octal(s: CStr) -> Option<(c_ulong, CStr, bool)> {
-    let (first, next) = s.split_first()?;
-
-    if first != b'0' {
-        return None;
-    }
-
-    Some(
-        if let Some((val, next, overflow)) = convert_integer(next, 8) {
-            (val, next, overflow)
-        } else {
-            // in case the prefix is not actually a prefix
-            (0, next, false)
-        },
-    )
+    convert_integer(s, 8)
 }
 
 pub fn convert_hex(s: CStr) -> Option<(c_ulong, CStr, bool)> {
