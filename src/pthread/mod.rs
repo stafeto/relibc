@@ -186,7 +186,9 @@ pub(crate) unsafe fn create(
     });
 
     let current_tcb = unsafe { Tcb::current() }.expect("no TCB!");
-    let new_tcb = unsafe { Tcb::new(current_tcb.tls_len) }.map_err(|_| Errno(ENOMEM))?;
+    // The lack of a resource for the thread's block is EAGAIN (XSH
+    // pthread_create); ENOMEM is not in its list.
+    let new_tcb = unsafe { Tcb::new(current_tcb.tls_len) }.map_err(|_| Errno(EAGAIN))?;
     new_tcb.pthread.flags = flags.bits().into();
     new_tcb.pthread.stack_base = stack_base;
     new_tcb.pthread.stack_size = stack_size;
