@@ -5,7 +5,11 @@ use crate::{
     c_str::CStr,
     error::{Errno, Result},
     header::{
-        fcntl::{AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_DUPFD},
+        errno::EINVAL,
+        fcntl::{
+            AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_DUPFD, F_SETFD,
+            FD_CLOEXEC, O_CLOEXEC,
+        },
         signal::sigevent,
         sys_resource::{rlimit, rusage},
         sys_select::timeval,
@@ -80,6 +84,21 @@ pub trait Pal {
 
     /// Platform implementation of [`dup2()`](crate::header::unistd::dup2) from [`unistd.h`](crate::header::unistd).
     fn dup2(fildes: c_int, fildes2: c_int) -> Result<c_int>;
+
+    /// Platform implementation of [`dup3()`](crate::header::unistd::dup3) from [`unistd.h`](crate::header::unistd).
+    ///
+    /// By default: EINVAL for equal descriptors and for flags other than
+    /// `O_CLOEXEC`, otherwise `dup2` and `FD_CLOEXEC` set on the copy.
+    fn dup3(fildes: c_int, fildes2: c_int, flag: c_int) -> Result<c_int> {
+        if fildes == fildes2 || flag & !O_CLOEXEC != 0 {
+            return Err(Errno(EINVAL));
+        }
+        let new = Self::dup2(fildes, fildes2)?;
+        if flag & O_CLOEXEC != 0 {
+            Self::fcntl(new, F_SETFD, FD_CLOEXEC as c_ulonglong)?;
+        }
+        Ok(new)
+    }
 
     /// Platform implementation of [`execve()`](crate::header::unistd::execve) from [`unistd.h`](crate::header::unistd).
     unsafe fn execve(path: CStr, argv: *const *mut c_char, envp: *const *mut c_char) -> Result<()>;

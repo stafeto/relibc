@@ -136,6 +136,10 @@ impl Pal for Sys {
         e_raw(unsafe { syscall!(DUP3, fildes, fildes2, 0) }).map(|f| f as c_int)
     }
 
+    fn dup3(fildes: c_int, fildes2: c_int, flag: c_int) -> Result<c_int> {
+        e_raw(unsafe { syscall!(DUP3, fildes, fildes2, flag) }).map(|f| f as c_int)
+    }
+
     unsafe fn execve(path: CStr, argv: *const *mut c_char, envp: *const *mut c_char) -> Result<()> {
         e_raw(syscall!(EXECVE, path.as_ptr(), argv, envp))?;
         unreachable!()

@@ -291,10 +291,9 @@ pub extern "C" fn dup2(fildes: c_int, fildes2: c_int) -> c_int {
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/dup.html>.
-// #[unsafe(no_mangle)]
-#[expect(unused_variables, reason = "function not yet implemented")]
+#[unsafe(no_mangle)]
 pub extern "C" fn dup3(fildes: c_int, fildes2: c_int, flag: c_int) -> c_int {
-    unimplemented!();
+    Sys::dup3(fildes, fildes2, flag).or_minus_one_errno()
 }
 
 // See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/encrypt.html>.
