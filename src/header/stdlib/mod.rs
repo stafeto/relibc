@@ -14,11 +14,10 @@ use crate::{
     c_str::CStr,
     casting::ByteLiteral,
     error::{Errno, ResultExt},
-    fs::File,
     header::{
         ctype,
         errno::{self, *},
-        fcntl::{O_ACCMODE, O_CLOEXEC, O_CREAT, O_EXCL, O_PATH, O_RDWR, open},
+        fcntl::{O_ACCMODE, O_CREAT, O_EXCL, O_RDWR, open},
         limits,
         stdio::flush_io_streams,
         stdlib::sort::{QsortContext, QsortRContext},
@@ -34,7 +33,7 @@ use crate::{
         self, Pal, Sys,
         types::{
             c_char, c_double, c_float, c_int, c_long, c_longlong, c_uint, c_ulong, c_ulonglong,
-            c_ushort, c_void, size_t, ssize_t, uintptr_t, wchar_t,
+            c_ushort, c_void, size_t, uintptr_t, wchar_t,
         },
     },
     raw_cell::RawCell,
@@ -1315,30 +1314,32 @@ pub unsafe extern "C" fn reallocarray(ptr: *mut c_void, m: size_t, n: size_t) ->
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/realpath.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn realpath(pathname: *const c_char, resolved: *mut c_char) -> *mut c_char {
-    let ptr = if resolved.is_null() {
+    if pathname.is_null() {
+        platform::ERRNO.set(EINVAL);
+        return ptr::null_mut();
+    }
+    let allocated = resolved.is_null();
+    let ptr = if allocated {
         (unsafe { malloc(limits::PATH_MAX) }).cast::<c_char>()
     } else {
         resolved
     };
-
-    let out = unsafe { slice::from_raw_parts_mut(ptr.cast::<u8>(), limits::PATH_MAX) };
-    {
-        let Ok(file) = File::open(unsafe { CStr::from_ptr(pathname) }, O_PATH | O_CLOEXEC) else {
-            return ptr::null_mut();
-        };
-
-        let len = out.len();
-        // TODO: better error handling
-        let read = Sys::fpath(*file, &mut out[..len - 1])
-            .map(|read| read as ssize_t)
-            .or_minus_one_errno();
-        if read < 0 {
-            return ptr::null_mut();
-        }
-        out[read.cast_unsigned()] = 0;
+    if ptr.is_null() {
+        return ptr::null_mut();
     }
 
-    ptr
+    let out = unsafe { slice::from_raw_parts_mut(ptr.cast::<u8>(), limits::PATH_MAX) };
+    match Sys::realpath(unsafe { CStr::from_ptr(pathname) }, out) {
+        Ok(()) => ptr,
+        Err(error) => {
+            // The buffer the call allocated goes with the failure.
+            if allocated {
+                unsafe { free(ptr.cast()) };
+            }
+            platform::ERRNO.set(error.0);
+            ptr::null_mut()
+        }
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getenv.html>.

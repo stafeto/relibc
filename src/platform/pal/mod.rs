@@ -4,11 +4,12 @@ use super::types::*;
 use crate::{
     c_str::CStr,
     error::{Errno, Result},
+    fs::File,
     header::{
         errno::EINVAL,
         fcntl::{
             AT_EMPTY_PATH, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_DUPFD, F_SETFD,
-            FD_CLOEXEC, O_CLOEXEC,
+            FD_CLOEXEC, O_CLOEXEC, O_PATH,
         },
         signal::sigevent,
         sys_resource::{rlimit, rusage},
@@ -168,6 +169,18 @@ pub trait Pal {
     unsafe fn fork() -> Result<pid_t>;
 
     fn fpath(fildes: c_int, out: &mut [u8]) -> Result<usize>;
+
+    /// Platform implementation of [`realpath()`](crate::header::stdlib::realpath) from [`stdlib.h`](crate::header::stdlib).
+    ///
+    /// The canonical path of `path`, with its NUL, in `out`. By default the
+    /// path of a descriptor opened with `O_PATH`.
+    fn realpath(path: CStr, out: &mut [u8]) -> Result<()> {
+        let file = File::open(path, O_PATH | O_CLOEXEC)?;
+        let room = out.len().checked_sub(1).ok_or(Errno(EINVAL))?;
+        let length = Self::fpath(*file, &mut out[..room])?;
+        out[length] = 0;
+        Ok(())
+    }
 
     /// Platform implementation of [`fsync()`](crate::header::unistd::fsync) from [`unistd.h`](crate::header::unistd).
     fn fsync(fildes: c_int) -> Result<()>;
