@@ -150,6 +150,8 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // The descriptor table of the layer holds 32 (`posix_fs::OPEN_MAX`),
         // and poll refuses more elements than that with EINVAL.
         _SC_OPEN_MAX => 32,
+        // The links of a path the file service follows.
+        _SC_SYMLOOP_MAX => SYMLOOP_MAX,
         // Left out of unistd.h: the functions answer ENOSYS or ENOTSUP, or
         // the platform has no such service. The XSI option is not claimed;
         // the Shell and Utilities volume (_SC_2_VERSION) waits for the

@@ -175,8 +175,13 @@ pub const MAX_CANON: c_long = _POSIX_MAX_CANON;
 /// queue; therefore, the maximum number of bytes a conforming application may
 /// require to be typed as input before reading them.
 pub const MAX_INPUT: c_long = _POSIX_MAX_INPUT;
-/// Maximum number of bytes in a symbolic link.
+/// Maximum number of bytes in a symbolic link. The stafeto file service
+/// keeps up to 511 (a path with its NUL fits `PATH_MAX`); limits.h defines
+/// the same value (cbindgen.toml).
+#[cfg(not(stafeto))]
 pub const SYMLINK_MAX: c_long = _POSIX_SYMLINK_MAX;
+#[cfg(stafeto)]
+pub const SYMLINK_MAX: c_long = 511;
 /// Minimum number of bytes of storage actually allocated for any portion of a
 /// file.
 pub const POSIX_ALLOC_SIZE_MIN: c_long = 4096;
@@ -186,7 +191,12 @@ pub const POSIX_ALLOC_SIZE_MIN: c_long = 4096;
 pub const PTHREAD_KEYS_MAX: c_long = 4096 * 32;
 pub const PTHREAD_STACK_MIN: c_long = 65536;
 /// Maximum number of symbolic links that can be reliably traversed in the
-/// resolution of a pathname in the absence of a loop.
+/// resolution of a pathname in the absence of a loop. The stafeto file
+/// service follows 32 and answers ELOOP for the 33rd; limits.h defines the
+/// same value (cbindgen.toml).
+#[cfg(not(stafeto))]
 pub const SYMLOOP_MAX: c_long = 64;
+#[cfg(stafeto)]
+pub const SYMLOOP_MAX: c_long = 32;
 /// Maximum length of terminal device name.
 pub const TTY_NAME_MAX: c_long = 32; // "/scheme/pty/".len() + size of usize::MAX as string + 1

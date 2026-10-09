@@ -7,6 +7,8 @@ after_includes = """
 #define PATH_MAX 512 // the stafeto layer's limit; PATH_MAX in mod.rs is the same
 #define ARG_MAX 65536 // the stafeto layer's limit; ARG_MAX in mod.rs is the same
 #define PIPE_BUF 512 // the stafeto pipe service's atomic write; PIPE_BUF in mod.rs is the same
+#define SYMLINK_MAX 511 // the longest link the stafeto file service keeps; SYMLINK_MAX in mod.rs is the same
+#define SYMLOOP_MAX 32 // the links the stafeto file service follows; SYMLOOP_MAX in mod.rs is the same
 """
 language = "C"
 no_includes = true
@@ -16,4 +18,4 @@ cpp_compat = true
 prefix_with_name = true
 
 [export]
-exclude = ["PATH_MAX", "ARG_MAX", "PIPE_BUF"]
+exclude = ["PATH_MAX", "ARG_MAX", "PIPE_BUF", "SYMLINK_MAX", "SYMLOOP_MAX"]
