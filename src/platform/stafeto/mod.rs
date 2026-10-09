@@ -180,6 +180,18 @@ unsafe extern "C" {
         actions: *const SpawnAction,
         count: usize,
     ) -> pid_t;
+    /// posix_spawnp of the name `file` with no slash: the layer searches the
+    /// directories of `path` (null for no PATH) after the file actions, from
+    /// the directory they left as the current one.
+    fn stafeto_spawnp(
+        file: *const c_char,
+        path: *const c_char,
+        argv: *const *const c_char,
+        envp: *const *const c_char,
+        attributes: *const SpawnAttributes,
+        actions: *const SpawnAction,
+        count: usize,
+    ) -> pid_t;
     /// waitpid: the child's PID (0 for WNOHANG with none), its status in
     /// `status`.
     fn stafeto_waitpid(pid: pid_t, status: *mut c_int, options: c_int) -> pid_t;
@@ -997,9 +1009,10 @@ impl Pal for Sys {
         if flags != 0 {
             return Err(Errno(EINVAL));
         }
-        ret(unsafe {
-            stafeto_renameat(old_dir, old_path.as_ptr(), new_dir, new_path.as_ptr())
-        } as isize)
+        ret(
+            unsafe { stafeto_renameat(old_dir, old_path.as_ptr(), new_dir, new_path.as_ptr()) }
+                as isize,
+        )
         .map(|_| ())
     }
 
@@ -1158,9 +1171,37 @@ impl Pal for Sys {
         program: CStr,
         fac: Option<&crate::header::spawn::posix_spawn_file_actions_t>,
         fat: Option<&crate::header::spawn::posix_spawnattr_t>,
-        mut argv: crate::iter::NulTerminated<*mut c_char>,
+        argv: crate::iter::NulTerminated<*mut c_char>,
         envp: Option<crate::iter::NulTerminated<*mut c_char>>,
     ) -> Result<pid_t> {
+        unsafe { spawn_search(program, None, fac, fat, argv, envp) }
+    }
+
+    unsafe fn spawnp(
+        file: CStr,
+        path: Option<CStr>,
+        fac: Option<&crate::header::spawn::posix_spawn_file_actions_t>,
+        fat: Option<&crate::header::spawn::posix_spawnattr_t>,
+        argv: crate::iter::NulTerminated<*mut c_char>,
+        envp: Option<crate::iter::NulTerminated<*mut c_char>>,
+    ) -> Result<pid_t> {
+        // PATH is searched by the layer, after the file actions.
+        unsafe { spawn_search(file, Some(path), fac, fat, argv, envp) }
+    }
+}
+
+/// posix_spawn of `program` (`search` None), or posix_spawnp of the name
+/// `program` in the directories of the PATH `search` holds (Some(None) for
+/// no PATH): the file actions and the attributes go to the layer.
+unsafe fn spawn_search(
+    program: CStr,
+    search: Option<Option<CStr>>,
+    fac: Option<&crate::header::spawn::posix_spawn_file_actions_t>,
+    fat: Option<&crate::header::spawn::posix_spawnattr_t>,
+    mut argv: crate::iter::NulTerminated<*mut c_char>,
+    envp: Option<crate::iter::NulTerminated<*mut c_char>>,
+) -> Result<pid_t> {
+    {
         use crate::header::spawn::Action;
         // The actions own their paths, which the layer reads through the
         // list built from them.
@@ -1210,14 +1251,25 @@ impl Pal for Sys {
             .as_ref()
             .map_or(core::ptr::null(), |a| a as *const SpawnAttributes);
         ret(unsafe {
-            stafeto_spawn(
-                program.as_ptr(),
-                argv,
-                envp,
-                attributes,
-                file_actions.as_ptr(),
-                file_actions.len(),
-            )
+            match search {
+                None => stafeto_spawn(
+                    program.as_ptr(),
+                    argv,
+                    envp,
+                    attributes,
+                    file_actions.as_ptr(),
+                    file_actions.len(),
+                ),
+                Some(path) => stafeto_spawnp(
+                    program.as_ptr(),
+                    path.map_or(ptr::null(), |path| path.as_ptr()),
+                    argv,
+                    envp,
+                    attributes,
+                    file_actions.as_ptr(),
+                    file_actions.len(),
+                ),
+            }
         } as isize)
         .map(|v| v as pid_t)
     }
