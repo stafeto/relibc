@@ -46,6 +46,7 @@ longjmp:
 	mov x13, x1
 	mov x0, x10
 	svc #33
+	cbnz x0, 3f
 	mov x0, x12
 	mov x1, x13
 1:
