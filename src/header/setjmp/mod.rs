@@ -81,6 +81,20 @@ pub unsafe extern "C" fn relibc_stafeto_entries_layout_v2(out: *mut usize) {
     }
 }
 
+/// The old entry geometry and the existing deferral syscall used by longjmp.
+/// # Safety
+/// `out` points to seven writable usize words.
+#[cfg(all(stafeto, target_arch = "aarch64"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn relibc_stafeto_entries_layout_v3(out: *mut usize) {
+    unsafe {
+        relibc_stafeto_entries_layout_v2(out);
+        out.add(4).write(32);
+        out.add(5).write(3);
+        out.add(6).write(4);
+    }
+}
+
 //Each platform has different sizes for sigjmp_buf, currently only x86_64 is supported
 unsafe extern "C" {
     /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/setjmp.html>.
