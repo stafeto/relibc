@@ -212,6 +212,7 @@ unsafe extern "C" {
     /// the negated errno.
     fn stafeto_unlinkat(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int;
     fn stafeto_mkdirat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int;
+    fn stafeto_mkfifoat(dirfd: c_int, path: *const c_char, mode: mode_t) -> c_int;
     fn stafeto_faccessat(dirfd: c_int, path: *const c_char, mode: c_int, flags: c_int) -> c_int;
     fn stafeto_renameat(
         old_dirfd: c_int,
@@ -842,7 +843,7 @@ impl Pal for Sys {
     }
 
     fn mkfifoat(dir_fd: c_int, path: CStr, mode: mode_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_mkfifoat(dir_fd, path.as_ptr(), mode) } as isize).map(|_| ())
     }
 
     unsafe fn mlock(addr: *const c_void, len: usize) -> Result<()> {
