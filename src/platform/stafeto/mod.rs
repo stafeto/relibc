@@ -41,6 +41,9 @@ unsafe extern "C" {
     fn stafeto_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn stafeto_close(fd: c_int) -> c_int;
     fn stafeto_ftruncate(fd: c_int, length: off_t) -> c_int;
+    fn stafeto_fsync(fd: c_int) -> c_int;
+    fn stafeto_fdatasync(fd: c_int) -> c_int;
+    fn stafeto_sync() -> c_int;
     fn stafeto_grantpt(fd: c_int) -> c_int;
     fn stafeto_lseek(fd: c_int, offset: off_t, whence: c_int) -> off_t;
     pub(crate) fn stafeto_exit(status: c_int) -> !;
@@ -627,7 +630,7 @@ impl Pal for Sys {
     }
 
     fn fdatasync(fildes: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_fdatasync(fildes) } as isize).map(|_| ())
     }
 
     fn flock(fd: c_int, operation: c_int) -> Result<()> {
@@ -664,7 +667,7 @@ impl Pal for Sys {
     }
 
     fn fsync(fildes: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_fsync(fildes) } as isize).map(|_| ())
     }
 
     fn ftruncate(fildes: c_int, length: off_t) -> Result<()> {
@@ -1054,7 +1057,7 @@ impl Pal for Sys {
     }
 
     fn sync() -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_sync() } as isize).map(|_| ())
     }
 
     fn timer_create(clock_id: clockid_t, evp: &sigevent) -> Result<timer_t> {
