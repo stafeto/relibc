@@ -43,7 +43,21 @@ after_includes = """
 #define LDBL_HAS_SUBNORM 1
 #define LDBL_DECIMAL_DIG DECIMAL_DIG
 
-// TODO: Support more architectures than x86_64 here:
+#if defined(__aarch64__) && __LDBL_MANT_DIG__ == 113
+// The Linux AArch64 ABI represents long double as IEEE binary128.
+#define FLT_EVAL_METHOD 0
+#define LDBL_TRUE_MIN __LDBL_DENORM_MIN__
+#define LDBL_MIN __LDBL_MIN__
+#define LDBL_MAX __LDBL_MAX__
+#define LDBL_EPSILON __LDBL_EPSILON__
+#define LDBL_MANT_DIG 113
+#define LDBL_DIG 33
+#define DECIMAL_DIG 36
+#define LDBL_MIN_EXP (-16381)
+#define LDBL_MAX_EXP 16384
+#define LDBL_MIN_10_EXP (-4931)
+#define LDBL_MAX_10_EXP 4932
+#else
 #define LDBL_TRUE_MIN 3.6451995318824746025e-4951L
 #define LDBL_MIN     3.3621031431120935063e-4932L
 #define LDBL_MAX     1.1897314953572317650e+4932L
@@ -52,6 +66,7 @@ after_includes = """
 #define LDBL_MANT_DIG 64
 #define LDBL_MIN_EXP (-16381)
 #define LDBL_MAX_EXP 16384
+#endif
 
 #endif // _RELIBC_BITS_FLOAT_H
 """
@@ -59,6 +74,9 @@ language = "C"
 style = "Tag"
 no_includes = true
 cpp_compat = true
+
+[export]
+exclude = ["fegetround"]
 
 [enum]
 prefix_with_name = true

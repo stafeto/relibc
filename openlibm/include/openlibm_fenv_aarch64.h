@@ -180,7 +180,7 @@ feholdexcept(fenv_t *__envp)
 
 	__mrs_fpsr(__r);
 	*__envp |= (uint32_t)__r;
-	__r &= ~(_ENABLE_MASK);
+	__r &= ~FE_ALL_EXCEPT;
 	__msr_fpsr(__r);
 	return (0);
 }
