@@ -114,6 +114,7 @@ unsafe extern "C" {
     /// and stack may go once the kernel told of its end.
     fn stafeto_thread_release(id: c_int);
     fn stafeto_ioctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int;
+    fn stafeto_tcgetattr(fd: c_int, out: *mut c_void) -> c_int;
     /// The name of the terminal `fd` is, NUL-terminated, into `len` bytes at
     /// `buf`: its length, or a negated errno (ENOTTY, ERANGE).
     fn stafeto_ttyname(fd: c_int, buf: *mut u8, len: usize) -> isize;
@@ -283,7 +284,7 @@ fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 15;
+const PLATFORM_INTERFACE: u64 = 16;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -523,6 +524,10 @@ impl Sys {
     }
     pub unsafe fn ioctl(fd: c_int, request: c_ulong, out: *mut c_void) -> Result<c_int> {
         ret(unsafe { stafeto_ioctl(fd, request, out) } as isize).map(|v| v as c_int)
+    }
+
+    pub unsafe fn tcgetattr_direct(fd: c_int, out: *mut c_void) -> Result<c_int> {
+        ret(unsafe { stafeto_tcgetattr(fd, out) } as isize).map(|v| v as c_int)
     }
 
     /// The name of the terminal `fd` is, into `out` (ttyname_r): its

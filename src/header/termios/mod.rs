@@ -2,6 +2,9 @@
 //!
 //! See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/termios.h.html>.
 
+#[cfg(stafeto)]
+use crate::error::ResultExt;
+
 use crate::{
     header::{errno, sys_ioctl},
     platform::{
@@ -102,7 +105,15 @@ pub struct termios {
 /// indicate the error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tcgetattr(fildes: c_int, termios_p: *mut termios) -> c_int {
-    unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TCGETS, termios_p.cast::<c_void>()) }
+    #[cfg(stafeto)]
+    {
+        unsafe { crate::platform::Sys::tcgetattr_direct(fildes, termios_p.cast::<c_void>()) }
+            .or_minus_one_errno()
+    }
+    #[cfg(not(stafeto))]
+    {
+        unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TCGETS, termios_p.cast::<c_void>()) }
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/tcsetattr.html>.
