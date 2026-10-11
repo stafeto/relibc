@@ -149,6 +149,10 @@ unsafe extern "C" {
     fn stafeto_getgid() -> gid_t;
     fn stafeto_getegid() -> gid_t;
     fn stafeto_getrlimit(resource: c_int, out: *mut rlimit) -> c_int;
+    pub(crate) fn stafeto_truncate(path: *const c_char, length: off_t) -> c_int;
+    fn stafeto_setrlimit(resource: c_int, input: *const rlimit) -> c_int;
+    fn stafeto_getgroups(size: c_int, out: *mut gid_t) -> c_int;
+    fn stafeto_fexecve(fd: c_int, argv: *const *const c_char, envp: *const *const c_char) -> c_int;
     fn stafeto_pread(fd: c_int, buf: *mut u8, len: usize, off: off_t) -> isize;
     fn stafeto_pwrite(fd: c_int, buf: *const u8, len: usize, off: off_t) -> isize;
     fn stafeto_umask(mask: mode_t) -> mode_t;
@@ -588,7 +592,7 @@ impl Pal for Sys {
 
     /// The layer's exec: a new process for the record with the loader,
     /// the record moved to it once the image is ready (stafeto 5c).
-    /// fexecve stays ENOSYS: the layer opens a program by its path.
+    /// fexecve selects the retained descriptor through the same loader.
     unsafe fn execve(path: CStr, argv: *const *mut c_char, envp: *const *mut c_char) -> Result<()> {
         static NONE: [usize; 1] = [0];
         let none = NONE.as_ptr().cast::<*const c_char>();
@@ -606,7 +610,16 @@ impl Pal for Sys {
         argv: *const *mut c_char,
         envp: *const *mut c_char,
     ) -> Result<()> {
-        Err(Errno(ENOSYS))
+        static NONE: [usize; 1] = [0];
+        let none = NONE.as_ptr().cast::<*const c_char>();
+        let list = |p: *const *mut c_char| {
+            if p.is_null() {
+                none
+            } else {
+                p.cast::<*const c_char>()
+            }
+        };
+        ret(unsafe { stafeto_fexecve(fildes, list(argv), list(envp)) } as isize).map(drop)
     }
 
     fn dup3(fildes: c_int, fildes2: c_int, flag: c_int) -> Result<c_int> {
@@ -738,8 +751,10 @@ impl Pal for Sys {
         unsafe { stafeto_getgid() }
     }
 
-    fn getgroups(list: Out<[gid_t]>) -> Result<c_int> {
-        Err(Errno(ENOSYS))
+    fn getgroups(mut list: Out<[gid_t]>) -> Result<c_int> {
+        let size = c_int::try_from(list.len()).map_err(|_| Errno(EINVAL))?;
+        ret(unsafe { stafeto_getgroups(size, list.as_mut_ptr().cast()) } as isize)
+            .map(|n| n as c_int)
     }
 
     fn getpagesize() -> usize {
@@ -786,7 +801,7 @@ impl Pal for Sys {
     }
 
     unsafe fn setrlimit(resource: c_int, rlimit: *const rlimit) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_setrlimit(resource, rlimit) } as isize).map(drop)
     }
 
     fn getrusage(who: c_int, r_usage: Out<rusage>) -> Result<()> {

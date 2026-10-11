@@ -31,7 +31,10 @@ pub const PATH_MAX: usize = 512;
 #[cfg(stafeto)]
 pub const ARG_MAX: usize = 65536;
 /// Maximum number of simultaneous supplementary group IDs per process.
+#[cfg(not(stafeto))]
 pub const NGROUPS_MAX: usize = 65536;
+#[cfg(stafeto)]
+pub const NGROUPS_MAX: usize = 16;
 /// Maximum number of `iovec` structures that one process has available for
 /// use with `readv()` or `writev()`.
 pub const IOV_MAX: c_int = 1024;

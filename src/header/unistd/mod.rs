@@ -1311,19 +1311,35 @@ pub extern "C" fn tcsetpgrp(fildes: c_int, pgid_id: pid_t) -> c_int {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/truncate.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn truncate(path: *const c_char, length: off_t) -> c_int {
-    let file = unsafe { CStr::from_ptr(path) };
-    // The descriptor is internal: no controlling terminal, no inheritance.
-    let fd = Sys::open(file, fcntl::O_WRONLY | fcntl::O_NOCTTY | fcntl::O_CLOEXEC, 0)
-        .or_minus_one_errno();
-    if fd < 0 {
-        return -1;
+    #[cfg(stafeto)]
+    {
+        let result = unsafe { platform::sys::stafeto_truncate(path, length) };
+        if result < 0 {
+            platform::ERRNO.set(-result);
+            return -1;
+        }
+        return result;
     }
+    #[cfg(not(stafeto))]
+    {
+        let file = unsafe { CStr::from_ptr(path) };
+        // The descriptor is internal: no controlling terminal, no inheritance.
+        let fd = Sys::open(
+            file,
+            fcntl::O_WRONLY | fcntl::O_NOCTTY | fcntl::O_CLOEXEC,
+            0,
+        )
+        .or_minus_one_errno();
+        if fd < 0 {
+            return -1;
+        }
 
-    let res = ftruncate(fd, length);
+        let res = ftruncate(fd, length);
 
-    if let Ok(()) = Sys::close(fd) {}; // TODO handle error
+        if let Ok(()) = Sys::close(fd) {}; // TODO handle error
 
-    res
+        res
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/ttyname.html>.

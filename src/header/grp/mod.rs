@@ -17,7 +17,7 @@ use alloc::string::{FromUtf8Error, String};
 use crate::{
     error::ResultExt,
     fs::File,
-    header::{errno, fcntl, limits, string::strlen},
+    header::{errno, fcntl, limits},
     io::{self, BufReader, Lines, prelude::*},
     platform::{
         self, Pal, Sys,
@@ -27,7 +27,7 @@ use crate::{
 
 use super::{
     errno::{EINVAL, EIO, ENOENT, ERANGE},
-    string::strncmp,
+    string::strcmp,
 };
 
 /// cbindgen:ignore
@@ -135,38 +135,46 @@ impl OwnedGrp {
     }
 }
 
-fn split(buf: &mut [u8]) -> Option<group> {
-    let gr_gid = match buf[0..mem::size_of::<gid_t>()].try_into() {
-        Ok(buf) => gid_t::from_ne_bytes(buf),
-        Err(_) => return None,
-    };
-
-    // Get address of buffer for fixing up gr_mem
-    let buf_addr = buf.as_ptr() as usize;
-
-    // We moved the gid to the beginning of the byte buffer so we can do this.
-    let mut parts = buf[mem::size_of::<gid_t>()..].split_mut(|&c| c == b'\0');
+fn split(buf: &mut [u8], array: usize, count: usize, used: usize) -> Option<group> {
+    let gr_gid = gid_t::from_ne_bytes(buf.get(..mem::size_of::<gid_t>())?.try_into().ok()?);
+    let base = buf.as_mut_ptr();
+    let mut parts = buf[mem::size_of::<gid_t>()..array].split_mut(|&c| c == 0);
     let gr_name = parts.next()?.as_mut_ptr().cast::<c_char>();
     let gr_passwd = parts.next()?.as_mut_ptr().cast::<c_char>();
-    let gr_mem = parts.next()?.as_mut_ptr().cast::<usize>();
-
-    // Adjust gr_mem address by buffer base address
-    // TODO: max group members length?
-    for i in 0..4096 {
+    let word = mem::size_of::<usize>();
+    let padding = (base as usize + array).wrapping_neg() & (mem::align_of::<usize>() - 1);
+    if used.checked_add(padding)? > buf.len() {
+        return None;
+    }
+    buf.copy_within(array..used, array + padding);
+    let array = array + padding;
+    let end = array.checked_add(count.checked_add(1)?.checked_mul(word)?)?;
+    if end > used + padding {
+        return None;
+    }
+    for i in 0..count {
+        let at = array + i * word;
+        let offset = usize::from_ne_bytes(buf.get(at..at + word)?.try_into().ok()?);
+        let offset = offset.checked_add(padding)?;
+        if offset < end || offset >= used + padding {
+            return None;
+        }
+        // The aligned pointer slot and referenced string both lie in this
+        // live, uniquely borrowed buffer. Preserve the pointer's provenance.
         unsafe {
-            if *gr_mem.add(i) == 0 {
-                // End of gr_mem pointer array
-                break;
-            }
-            *gr_mem.add(i) += buf_addr;
+            base.add(at)
+                .cast::<*mut c_char>()
+                .write(base.add(offset).cast());
         }
     }
-
+    buf[end - word..end].fill(0);
     Some(group {
         gr_name,
         gr_passwd,
         gr_gid,
-        gr_mem: gr_mem.cast::<*mut c_char>(),
+        // The actual caller buffer address, rather than its nominal alignment,
+        // determines the padding. Every member pointer and the terminator fit.
+        gr_mem: unsafe { base.add(array) }.cast::<*mut c_char>(),
     })
 }
 
@@ -180,7 +188,7 @@ fn parse_grp(line: String, destbuf: Option<DestBuffer>) -> Result<OwnedGrp, Erro
         .collect::<Vec<_>>();
     let mut buffer = buffer.split_mut(|i| *i == b'\0');
 
-    let strings = {
+    let (mut strings, member_array_start, member_count) = {
         let mut vec: Vec<u8> = Vec::new();
 
         let gr_name = buffer.next().ok_or(Error::EOF)?.to_vec();
@@ -239,24 +247,31 @@ fn parse_grp(line: String, destbuf: Option<DestBuffer>) -> Result<OwnedGrp, Erro
             vec.push(0);
         }
 
-        vec
+        let count = (member_array_end - member_array_start) / mem::size_of::<usize>();
+        (vec, member_array_start, count)
     };
+    let used = strings.len();
+    // Reserve padding before choosing the final allocation/caller buffer address.
+    strings.resize(used + mem::align_of::<usize>() - 1, 0);
 
     let mut buffer = match destbuf {
         None => MaybeAllocated::Owned(Box::into_pin(strings.into_boxed_slice())),
         Some(buf) => {
             let mut buf = MaybeAllocated::Borrowed(buf);
 
-            if buf.len() < strings.len() {
+            let padding = (buf.as_ptr() as usize + member_array_start).wrapping_neg()
+                & (mem::align_of::<usize>() - 1);
+            if buf.len() < used + padding {
                 platform::ERRNO.set(errno::ERANGE);
                 return Err(Error::BufTooSmall);
             }
 
-            buf[..strings.len()].copy_from_slice(&strings);
+            buf[..used].copy_from_slice(&strings[..used]);
             buf
         }
     };
-    let reference = split(&mut buffer).ok_or(Error::Other)?;
+    let reference =
+        split(&mut buffer, member_array_start, member_count, used).ok_or(Error::Other)?;
 
     Ok(OwnedGrp { buffer, reference })
 }
@@ -309,13 +324,7 @@ pub unsafe extern "C" fn getgrnam(name: *const c_char) -> *mut group {
         };
 
         // Attempt to prevent BO vulnerabilities
-        if unsafe {
-            strncmp(
-                grp.reference.gr_name,
-                name,
-                strlen(grp.reference.gr_name).min(strlen(name)),
-            ) == 0
-        } {
+        if unsafe { strcmp(grp.reference.gr_name, name) == 0 } {
             return grp.into_global();
         }
     }
@@ -401,39 +410,43 @@ pub unsafe extern "C" fn getgrnam_r(
     buflen: size_t,
     result: *mut *mut group,
 ) -> c_int {
-    let Ok(db) = File::open(GROUP_FILE.into(), fcntl::O_RDONLY) else {
-        return ENOENT;
+    unsafe {
+        *result = ptr::null_mut();
+    }
+    let db = match File::open(GROUP_FILE.into(), fcntl::O_RDONLY) {
+        Ok(db) => db,
+        Err(error) => return error.0,
     };
-
     for line in BufReader::new(db).lines() {
-        let Ok(line) = line else { return EINVAL };
-        let Ok(grp) = parse_grp(
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => return error.raw_os_error().unwrap_or(EIO),
+        };
+        let grp = match parse_grp(
             line,
             Some(DestBuffer {
                 ptr: buffer.cast::<u8>(),
                 len: buflen,
             }),
-        ) else {
-            return EINVAL;
+        ) {
+            Ok(grp) => grp,
+            Err(error) => {
+                return match error {
+                    Error::BufTooSmall => ERANGE,
+                    Error::Misc(error) => error.raw_os_error().unwrap_or(EIO),
+                    _ => EINVAL,
+                };
+            }
         };
-
-        if unsafe {
-            strncmp(
-                grp.reference.gr_name,
-                name,
-                strlen(grp.reference.gr_name).min(strlen(name)),
-            ) == 0
-        } {
+        if unsafe { strcmp(grp.reference.gr_name, name) == 0 } {
             unsafe {
                 *result_buf = grp.reference;
                 *result = result_buf;
             }
-
             return 0;
         }
     }
-
-    ENOENT
+    0
 }
 
 /// MT-Unsafe race:grent race:grentbuf locale

@@ -121,7 +121,7 @@ impl OwnedPwd {
 #[derive(Clone, Copy, Debug)]
 enum Cause {
     Eof,
-    Other,
+    Other(c_int),
 }
 
 /// cbindgen:ignore
@@ -145,10 +145,11 @@ fn getpwent_r(
     destination: Option<DestBuffer>,
 ) -> Result<OwnedPwd, Cause> {
     let mut buf = Vec::new();
-    if reader
-        .read_until(b'\n', &mut buf)
-        .map_err(|_| Cause::Other)?
-        == 0
+    if reader.read_until(b'\n', &mut buf).map_err(|error| {
+        let code = error.raw_os_error().unwrap_or(errno::EIO);
+        platform::ERRNO.set(code);
+        Cause::Other(code)
+    })? == 0
     {
         return Err(Cause::Eof);
     }
@@ -174,7 +175,7 @@ fn getpwent_r(
             let mut new = MaybeAllocated::Borrowed(dst);
             if new.len() < buf.len() {
                 platform::ERRNO.set(errno::ERANGE);
-                return Err(Cause::Other);
+                return Err(Cause::Other(errno::ERANGE));
             }
             new[..buf.len()].copy_from_slice(&buf);
             new
@@ -182,7 +183,10 @@ fn getpwent_r(
     };
 
     // Chop up the result into a valid structure
-    let passwd = sys::split(&mut buf).ok_or(Cause::Other)?;
+    let passwd = sys::split(&mut buf).ok_or_else(|| {
+        platform::ERRNO.set(errno::EINVAL);
+        Cause::Other(errno::EINVAL)
+    })?;
 
     Ok(OwnedPwd {
         buffer: buf,
@@ -194,9 +198,10 @@ fn pwd_lookup<F>(mut matches: F, destination: Option<DestBuffer>) -> Result<Owne
 where
     F: FnMut(&passwd) -> bool,
 {
-    let Ok(file) = File::open(c"/etc/passwd".into(), fcntl::O_RDONLY) else {
-        return Err(Cause::Other);
-    };
+    let file = File::open(c"/etc/passwd".into(), fcntl::O_RDONLY).map_err(|error| {
+        platform::ERRNO.set(error.0);
+        Cause::Other(error.0)
+    })?;
 
     let mut reader = BufReader::new(file);
 
@@ -224,9 +229,9 @@ unsafe fn mux(
             unsafe { *result = ptr::null_mut() };
             0
         }
-        Err(Cause::Other) => {
+        Err(Cause::Other(code)) => {
             unsafe { *result = ptr::null_mut() };
-            -1
+            code
         }
     }
 }

@@ -147,9 +147,21 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_THREAD_ATTR_STACKSIZE
         | _SC_TIMEOUTS => 202405,
         _SC_JOB_CONTROL | _SC_SAVED_IDS | _SC_SHELL => 1,
-        // The descriptor table of the layer holds 32 (`posix_fs::OPEN_MAX`),
-        // and poll refuses more elements than that with EINVAL.
-        _SC_OPEN_MAX => 32,
+        // A lowered process limit constrains allocation; infinity does not
+        // enlarge the layer's physical descriptor table.
+        _SC_OPEN_MAX => {
+            let mut limit = core::mem::MaybeUninit::<crate::header::sys_resource::rlimit>::uninit();
+            if unsafe {
+                crate::header::sys_resource::getrlimit(
+                    crate::header::sys_resource::RLIMIT_NOFILE as c_int,
+                    limit.as_mut_ptr(),
+                )
+            } < 0
+            {
+                return Some(-1);
+            }
+            unsafe { limit.assume_init() }.rlim_cur.min(32) as c_long
+        }
         // The links of a path the file service follows.
         _SC_SYMLOOP_MAX => SYMLOOP_MAX,
         // Left out of unistd.h: the functions answer ENOSYS or ENOTSUP, or
