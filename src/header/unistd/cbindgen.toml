@@ -30,8 +30,8 @@ after_includes = """
 // and the XSI option (_XOPEN_UNIX, _XOPEN_VERSION, _XOPEN_SHM).
 #define _POSIX_SUBPROFILE 1
 #define _POSIX_VERSION 202405L
-// Synchronous RAM fsync works; aio_fsync and aio.h are not implemented.
-#define _POSIX_FSYNC -1
+// _POSIX_FSYNC remains omitted until aio_fsync and aio.h are implemented.
+// Synchronous RAM fsync works independently of that complete option.
 #define _POSIX_BARRIERS 202405L
 #define _POSIX_MONOTONIC_CLOCK 202405L
 #define _POSIX_REALTIME_SIGNALS 202405L
