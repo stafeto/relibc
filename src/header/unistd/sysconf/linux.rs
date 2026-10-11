@@ -138,7 +138,8 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
     Some(match name {
         // Defined in unistd.h.
         _SC_VERSION => 202405,
-        _SC_BARRIERS
+        _SC_FSYNC
+        | _SC_BARRIERS
         | _SC_MONOTONIC_CLOCK
         | _SC_REALTIME_SIGNALS
         | _SC_SPAWN
@@ -170,7 +171,6 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // utilities of 5n.
         _SC_TIMERS
         | _SC_ASYNCHRONOUS_IO
-        | _SC_FSYNC
         | _SC_MAPPED_FILES
         | _SC_MEMLOCK
         | _SC_MEMLOCK_RANGE
