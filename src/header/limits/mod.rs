@@ -160,7 +160,10 @@ pub const HOST_NAME_MAX: c_long = _POSIX_HOST_NAME_MAX;
 pub const LOGIN_NAME_MAX: c_long = 255;
 pub const GETENTROPY_MAX: c_long = 256;
 /// Maximum number of links to a single file.
+#[cfg(not(stafeto))]
 pub const LINK_MAX: c_long = 127;
+#[cfg(stafeto)]
+pub const LINK_MAX: c_long = 384;
 /// Maximum number of bytes that is guaranteed to be atomic when writing to a
 /// pipe. The stafeto pipe service takes such a write in one message, at
 /// the minimum of POSIX ({_POSIX_PIPE_BUF}, `proto_pipe::ATOMIC`);

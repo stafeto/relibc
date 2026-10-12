@@ -1508,10 +1508,14 @@ pub fn detect_base(s: CStr) -> Option<(c_int, CStr)> {
     let (first, adv1) = s.split_first()?;
 
     Some(match (first, adv1.split_first()) {
-        (b'0', Some((b'x' | b'X', adv2))) => (16, adv2),
-        (b'0', Some((b'0'..=b'7', _))) => (8, adv1),
-        // in this case, the prefix (0) is going to be the number
-        (b'0', None) => (8, s),
+        (b'0', Some((b'x' | b'X', adv2)))
+            if adv2.split_first().is_some_and(|(digit, _)| digit.is_ascii_hexdigit()) =>
+        {
+            (16, adv2)
+        }
+        // The leading zero is itself an octal digit, including before an
+        // invalid digit or a hexadecimal prefix without any hexadecimal digit.
+        (b'0', _) => (8, s),
         (_, _) => (10, s),
     })
 }
