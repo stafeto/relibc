@@ -56,6 +56,7 @@ pub(crate) enum FmtKind {
     Scientific,
     Decimal,
     AnyNotation,
+    Hex,
 
     String,
     Char,
@@ -153,10 +154,11 @@ impl VaArg {
                 VaArg::ssize_t(unsafe { ap.next_arg::<ssize_t>() })
             }
 
-            (FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific, IntKind::LongLong) => {
-                VaArg::c_longdouble(unsafe { VaArg::extract_longdouble(ap) })
-            }
-            (FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific, _) => {
+            (
+                FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific | FmtKind::Hex,
+                IntKind::LongLong,
+            ) => VaArg::c_longdouble(unsafe { VaArg::extract_longdouble(ap) }),
+            (FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific | FmtKind::Hex, _) => {
                 VaArg::c_double(unsafe { ap.next_arg::<c_double>() })
             }
 
@@ -318,10 +320,11 @@ impl VaArg {
                 VaArg::ssize_t(unsafe { untyped.ssize_t })
             }
 
-            (FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific, IntKind::LongLong) => {
-                VaArg::c_longdouble(unsafe { untyped.c_longdouble })
-            }
-            (FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific, _) => {
+            (
+                FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific | FmtKind::Hex,
+                IntKind::LongLong,
+            ) => VaArg::c_longdouble(unsafe { untyped.c_longdouble }),
+            (FmtKind::AnyNotation | FmtKind::Decimal | FmtKind::Scientific | FmtKind::Hex, _) => {
                 VaArg::c_double(unsafe { untyped.c_double })
             }
 
@@ -600,6 +603,115 @@ fn fmt_float_nonfinite<W: Write>(
     Ok(())
 }
 
+/// The pieces of a finite binary floating-point value: the sign, the leading
+/// hexadecimal digit (1 for a normal value, 0 for zero and subnormals), the
+/// fraction as `digits` hexadecimal digits and the binary exponent.
+fn hex_parts(bits: u128, long: bool) -> Option<(bool, u8, u128, usize, i32)> {
+    if long {
+        let neg = bits >> 127 != 0;
+        let e = ((bits >> 112) & 0x7fff) as i32;
+        let frac = bits & ((1u128 << 112) - 1);
+        if e == 0x7fff {
+            return None;
+        }
+        Some(if e == 0 {
+            (neg, 0, frac, 28, if frac == 0 { 0 } else { -16382 })
+        } else {
+            (neg, 1, frac, 28, e - 16383)
+        })
+    } else {
+        let neg = (bits >> 63) & 1 != 0;
+        let e = ((bits >> 52) & 0x7ff) as i32;
+        let frac = bits & ((1u128 << 52) - 1);
+        if e == 0x7ff {
+            return None;
+        }
+        // 52 bits are 13 hexadecimal digits.
+        Some(if e == 0 {
+            (neg, 0, frac, 13, if frac == 0 { 0 } else { -1022 })
+        } else {
+            (neg, 1, frac, 13, e - 1023)
+        })
+    }
+}
+
+#[expect(clippy::too_many_arguments)]
+fn fmt_float_hex<W: Write>(
+    w: &mut W,
+    upper: bool,
+    parts: (bool, u8, u128, usize, i32),
+    precision: Option<usize>,
+    alternate: bool,
+    sign: Option<u8>,
+    left: bool,
+    pad_space: usize,
+    pad_zero: usize,
+) -> io::Result<()> {
+    let (neg, mut lead, mut frac, digits, exp) = parts;
+    let mut shown = digits;
+    if let Some(p) = precision
+        && p < digits
+    {
+        // Round to nearest, ties to even, at the digit p.
+        let drop = ((digits - p) * 4) as u32;
+        let rest = frac & ((1u128 << drop) - 1);
+        let half = 1u128 << (drop - 1);
+        frac >>= drop;
+        let odd = if p == 0 { lead & 1 == 1 } else { frac & 1 == 1 };
+        if rest > half || (rest == half && odd) {
+            frac += 1;
+            if p == 0 || frac >> (p * 4) != 0 {
+                if p != 0 {
+                    frac &= (1u128 << (p * 4)) - 1;
+                }
+                lead += 1;
+            }
+        }
+        shown = p;
+    } else if precision.is_none() {
+        while shown > 0 && (frac >> ((digits - shown) * 4)) & 0xf == 0 {
+            shown -= 1;
+        }
+    }
+    let mut body = String::new();
+    body.push((b'0' + lead) as char);
+    let wanted = precision.unwrap_or(shown);
+    if wanted > 0 || alternate {
+        body.push('.');
+    }
+    let value = if precision.is_some_and(|p| p < digits) {
+        frac
+    } else {
+        frac >> ((digits - shown) * 4)
+    };
+    for i in (0..shown).rev() {
+        body.push(core::char::from_digit(((value >> (i * 4)) & 0xf) as u32, 16).unwrap());
+    }
+    for _ in shown..wanted {
+        body.push('0');
+    }
+    let mut tail = format!("p{:+}", exp);
+    if upper {
+        body = body.to_uppercase();
+        tail = tail.to_uppercase();
+    }
+    let prefix = if upper { "0X" } else { "0x" };
+    let sign_len = usize::from(neg || sign.is_some());
+    let len = sign_len + 2 + body.len() + tail.len();
+    pad(w, !left, b' ', len..pad_space)?;
+    if neg {
+        w.write_all(b"-")?;
+    } else if let Some(c) = sign {
+        w.write_all(&[c])?;
+    }
+    w.write_all(prefix.as_bytes())?;
+    pad(w, !left, b'0', len..pad_zero)?;
+    w.write_all(body.as_bytes())?;
+    w.write_all(tail.as_bytes())?;
+    pad(w, left, b' ', len..pad_space)?;
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct PrintfIter<'a, T: c_str::Kind> {
     pub(crate) format: NulStr<'a, T>,
@@ -715,6 +827,7 @@ impl<'a, T: c_str::Kind> Iterator for PrintfIter<'a, T> {
             'e' | 'E' => FmtKind::Scientific,
             'f' | 'F' | 'L' => FmtKind::Decimal,
             'g' | 'G' => FmtKind::AnyNotation,
+            'a' | 'A' => FmtKind::Hex,
             's' => FmtKind::String,
             'c' => FmtKind::Char,
             'p' => FmtKind::Pointer,
@@ -857,8 +970,8 @@ pub(crate) unsafe fn inner_printf<T: c_str::Kind>(
         let fmtcase = match fmt {
             'b' if T::IS_THIN_NOT_WIDE => Some(FmtCase::Lower),
             'B' if T::IS_THIN_NOT_WIDE => Some(FmtCase::Upper),
-            'x' | 'f' | 'e' | 'g' => Some(FmtCase::Lower),
-            'X' | 'F' | 'E' | 'G' => Some(FmtCase::Upper),
+            'x' | 'f' | 'e' | 'g' | 'a' => Some(FmtCase::Lower),
+            'X' | 'F' | 'E' | 'G' | 'A' => Some(FmtCase::Upper),
             _ => None,
         };
 
@@ -1021,6 +1134,46 @@ pub(crate) unsafe fn inner_printf<T: c_str::Kind>(
                         w, false, alternate, precision, float, left, pad_space, pad_zero,
                     )?;
                 } else {
+                    fmt_float_nonfinite(w, float, fmtcase.unwrap(), left, pad_space, pad_zero)?;
+                }
+            }
+            FmtKind::Hex => {
+                let (bits, long) = match unsafe {
+                    varargs.get(index, &mut ap, Some((arg.fmtkind, arg.intkind)))
+                } {
+                    VaArg::c_double(i) => (u128::from(i.to_bits()), false),
+                    VaArg::c_longdouble(i) => (i, true),
+                    _ => panic!("this should not be possible"),
+                };
+                let sign = if sign_always {
+                    Some(b'+')
+                } else if sign_reserve {
+                    Some(b' ')
+                } else {
+                    None
+                };
+                if let Some(parts) = hex_parts(bits, long) {
+                    fmt_float_hex(
+                        w,
+                        fmt == 'A',
+                        parts,
+                        precision,
+                        alternate,
+                        sign,
+                        left,
+                        pad_space,
+                        pad_zero,
+                    )?;
+                } else {
+                    let float = if long {
+                        // The sign and the NaN-ness decide the text.
+                        let frac = bits & ((1u128 << 112) - 1);
+                        let neg = bits >> 127 != 0;
+                        let v = if frac == 0 { f64::INFINITY } else { f64::NAN };
+                        if neg { -v } else { v }
+                    } else {
+                        f64::from_bits(bits as u64)
+                    };
                     fmt_float_nonfinite(w, float, fmtcase.unwrap(), left, pad_space, pad_zero)?;
                 }
             }
