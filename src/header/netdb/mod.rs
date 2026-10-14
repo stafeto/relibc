@@ -506,10 +506,26 @@ pub unsafe extern "C" fn gethostbyname2(name: *const c_char, af: c_int) -> *mut 
     (&raw mut HOST_ENTRY).cast::<hostent>()
 }
 
-/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/endnetent.html>.
-#[expect(unused_variables, reason = "function not yet implemented")]
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getnetbyaddr.html>.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn getnetbyaddr(net: u32, net_type: c_int) -> *mut netent {
-    unimplemented!();
+    unsafe { setnetent(NET_STAYOPEN) };
+    loop {
+        let entry = unsafe { getnetent() };
+        if entry.is_null() {
+            break;
+        }
+        if unsafe { (*entry).n_net == net && (*entry).n_addrtype == net_type } {
+            if unsafe { NET_STAYOPEN } == 0 {
+                unsafe { endnetent() };
+            }
+            return entry;
+        }
+    }
+    if unsafe { NET_STAYOPEN } == 0 {
+        unsafe { endnetent() };
+    }
+    ptr::null_mut()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/endnetent.html>.

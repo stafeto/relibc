@@ -21,12 +21,42 @@ use super::{
 
 pub type LookupHost = Vec<in_addr>;
 
+/// The IPv4 addresses `/etc/hosts` gives to `host`.
+fn hosts_file(host: &str) -> Vec<in_addr> {
+    use crate::{fs::File, header::fcntl, io::Read};
+    let mut text = alloc::string::String::new();
+    let Ok(mut file) = File::open(c"/etc/hosts".into(), fcntl::O_RDONLY) else {
+        return Vec::new();
+    };
+    if file.read_to_string(&mut text).is_err() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("");
+        let mut words = line.split_whitespace();
+        let Some(address) = words.next().and_then(parse_ipv4_string) else {
+            continue;
+        };
+        if words.any(|name| name.eq_ignore_ascii_case(host)) {
+            found.push(in_addr { s_addr: address });
+        }
+    }
+    found
+}
+
 pub fn lookup_host(host: &str) -> Result<LookupHost, Errno> {
     if let Some(host_direct_addr) = parse_ipv4_string(host) {
         // already an ip address
         return Ok(vec![in_addr {
             s_addr: host_direct_addr,
         }]);
+    }
+
+    // The hosts file answers before the name server is asked.
+    let known = hosts_file(host);
+    if !known.is_empty() {
+        return Ok(known);
     }
 
     let dns_string = get_dns_server()?;
