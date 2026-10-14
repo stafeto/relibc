@@ -1,0 +1,13 @@
+# POSIX header spec: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/ftw.h.html
+#
+# Spec quotations relating to includes:
+# - "The <ftw.h> header shall define the stat structure and the symbolic names for st_mode and the file type test macros as described in <sys/stat.h>."
+sys_includes = ["sys/stat.h"]
+include_guard = "_RELIBC_FTW_H"
+language = "C"
+style = "Tag"
+no_includes = true
+cpp_compat = true
+
+[enum]
+prefix_with_name = true

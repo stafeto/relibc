@@ -98,7 +98,7 @@ pub mod fcntl;
 pub mod float;
 pub mod fmtmsg;
 pub mod fnmatch;
-// TODO: ftw.h
+pub mod ftw;
 pub mod getopt;
 pub mod glob;
 pub mod grp;
