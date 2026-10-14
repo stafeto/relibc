@@ -205,6 +205,8 @@ int dbm_delete(DBM *db, datum key) {
     return 0;
 }
 
+datum dbm_nextkey(DBM *db);
+
 datum dbm_firstkey(DBM *db) {
     db->cursor = 0;
     return dbm_nextkey(db);
