@@ -200,6 +200,7 @@ pub mod time;
 // TODO: ucontext.h (deprecated)
 // TODO: ulimit.h (deprecated)
 // TODO: unctrl.h (deprecated)
+pub mod uchar;
 pub mod unistd;
 #[deprecated]
 pub mod utime;

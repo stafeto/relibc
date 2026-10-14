@@ -1,0 +1,22 @@
+# POSIX header spec: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/uchar.h.html
+#
+# Spec quotations relating to includes:
+# - "The <uchar.h> header shall define the mbstate_t type as described in <wchar.h>."
+# - "The <uchar.h> header shall define the size_t type as described in <stddef.h>."
+sys_includes = ["stddef.h", "stdint.h", "wchar.h"]
+include_guard = "_RELIBC_UCHAR_H"
+after_includes = """
+#ifndef __cplusplus
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
+typedef uint_least16_t char16_t;
+typedef uint_least32_t char32_t;
+#endif
+#endif
+"""
+language = "C"
+style = "Type"
+no_includes = true
+cpp_compat = true
+
+[enum]
+prefix_with_name = true

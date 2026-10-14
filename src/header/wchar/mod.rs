@@ -34,15 +34,33 @@ mod wscanf;
 
 pub use utf8::get_char_encoded_length;
 
-// TODO actually hold some state
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/wchar.h.html>.
 ///
 /// A complete object type other than an array type that can hold the
 /// conversion state necessary to convert between sequences of (possibly
 /// multi-byte) characters and wide characters.
+///
+/// The state holds the bytes of a sequence that is not complete and the
+/// surrogate that is pending, for the functions of `uchar.h`; the other
+/// conversion functions of this library take a sequence whole.
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct mbstate_t;
+pub struct mbstate_t {
+    /// The bytes of an incomplete sequence, the first in the lowest byte.
+    pub __bytes: u32,
+    /// The number of those bytes in the low byte; the pending surrogate in
+    /// the high half.
+    pub __count_and_surrogate: u32,
+}
+
+impl mbstate_t {
+    pub const fn new() -> Self {
+        Self {
+            __bytes: 0,
+            __count_and_surrogate: 0,
+        }
+    }
+}
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/btowc.html>.
 #[unsafe(no_mangle)]
@@ -54,7 +72,7 @@ pub unsafe extern "C" fn btowc(c: c_int) -> wint_t {
 
     let uc = c as u8;
     let c = uc as c_char;
-    let mut ps: mbstate_t = mbstate_t;
+    let mut ps: mbstate_t = mbstate_t::new();
     let mut wc: wchar_t = 0;
     let saved_errno = platform::ERRNO.get();
     let status = unsafe { mbrtowc(&raw mut wc, ptr::from_ref::<c_char>(&c), 1, &raw mut ps) };
@@ -153,7 +171,7 @@ pub unsafe extern "C" fn fgetws(ws: *mut wchar_t, n: c_int, stream: *mut FILE) -
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fputwc(wc: wchar_t, stream: *mut FILE) -> wint_t {
     //Convert wchar_t to multibytes first
-    let mut mbstate = mbstate_t;
+    let mut mbstate = mbstate_t::new();
     let mut bytes: [c_char; MB_CUR_MAX as usize] = [0; MB_CUR_MAX as usize];
 
     let amount = unsafe { wcrtomb(bytes.as_mut_ptr(), wc, &raw mut mbstate) };
@@ -229,15 +247,17 @@ pub unsafe extern "C" fn getwchar() -> wint_t {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/mbsinit.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mbsinit(ps: *const mbstate_t) -> c_int {
-    // The state holds nothing: UTF-8 sequences are decoded one at a time.
-    let _ = ps;
-    1
+    if ps.is_null() {
+        return 1;
+    }
+    let state = unsafe { *ps };
+    c_int::from(state.__bytes == 0 && state.__count_and_surrogate == 0)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/mbrlen.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mbrlen(s: *const c_char, n: size_t, ps: *mut mbstate_t) -> size_t {
-    static mut INTERNAL: mbstate_t = mbstate_t;
+    static mut INTERNAL: mbstate_t = mbstate_t::new();
     let ps = if ps.is_null() { &raw mut INTERNAL } else { ps };
     unsafe { mbrtowc(ptr::null_mut(), s, n, ps) }
 }
@@ -253,7 +273,7 @@ pub unsafe extern "C" fn mbrtowc(
     n: size_t,
     ps: *mut mbstate_t,
 ) -> size_t {
-    static mut INTERNAL: mbstate_t = mbstate_t;
+    static mut INTERNAL: mbstate_t = mbstate_t::new();
 
     let ps = if ps.is_null() { &raw mut INTERNAL } else { ps };
     if s.is_null() {
@@ -275,7 +295,7 @@ pub unsafe extern "C" fn mbsnrtowcs(
     dst_len: size_t,
     ps: *mut mbstate_t,
 ) -> size_t {
-    static mut INTERNAL: mbstate_t = mbstate_t;
+    static mut INTERNAL: mbstate_t = mbstate_t::new();
 
     let ps = if ps.is_null() { &raw mut INTERNAL } else { ps };
 
@@ -380,7 +400,7 @@ pub unsafe extern "C" fn ungetwc(wc: wint_t, stream: &mut FILE) -> wint_t {
     if wc == WEOF {
         return wc;
     }
-    static mut INTERNAL: mbstate_t = mbstate_t;
+    static mut INTERNAL: mbstate_t = mbstate_t::new();
     let mut bytes: [c_char; MB_CUR_MAX as usize] = [0; MB_CUR_MAX as usize];
 
     let amount = unsafe { wcrtomb(bytes.as_mut_ptr(), wc as wchar_t, &raw mut INTERNAL) };
@@ -558,7 +578,7 @@ pub unsafe extern "C" fn wcsrtombs(
     n: size_t,
     mut st: *mut mbstate_t,
 ) -> size_t {
-    let mut mbs = mbstate_t {};
+    let mut mbs = mbstate_t::new();
     if st.is_null() {
         st = &raw mut mbs;
     }
@@ -765,7 +785,7 @@ pub unsafe extern "C" fn wcsnrtombs(
     let mut written = 0;
     let mut read = 0;
     let mut buf: [c_char; MB_LEN_MAX as usize] = [0; MB_LEN_MAX as usize];
-    let mut mbs = mbstate_t {};
+    let mut mbs = mbstate_t::new();
 
     if ps.is_null() {
         ps = &raw mut mbs;
