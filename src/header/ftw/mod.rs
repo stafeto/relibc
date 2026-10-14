@@ -187,7 +187,7 @@ fn visit(walk: &Walk, path: &str, base: usize, level: c_int, stopped: &mut Optio
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nftw(
     path: *const c_char,
-    fn_: Option<NftwFn>,
+    fn_: Option<extern "C" fn(*const c_char, *const stat, c_int, *mut FTW) -> c_int>,
     _fd_limit: c_int,
     flags: c_int,
 ) -> c_int {
@@ -213,7 +213,11 @@ type FtwFn = extern "C" fn(*const c_char, *const stat, c_int) -> c_int;
 /// # Safety
 /// As for `nftw`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ftw(path: *const c_char, fn_: Option<FtwFn>, _ndirs: c_int) -> c_int {
+pub unsafe extern "C" fn ftw(
+    path: *const c_char,
+    fn_: Option<extern "C" fn(*const c_char, *const stat, c_int) -> c_int>,
+    _ndirs: c_int,
+) -> c_int {
     // `ftw` has no position argument; its function is wrapped by a small
     // trampoline kept in a thread-local cell.
     use core::cell::Cell;
