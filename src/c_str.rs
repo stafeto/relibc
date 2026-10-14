@@ -31,6 +31,7 @@ pub trait Kind: private::Sealed + Copy + 'static {
     fn r2c(c: Self::Char) -> Self::C;
     fn c2r(c: Self::C) -> Self::Char;
 
+    fn char_from_u32(c: u32) -> Option<Self::Char>;
     fn chars_from_bytes(b: &[u8]) -> Option<&[Self::Char]>;
     fn chars_to_bytes(c: &[Self::Char]) -> Option<&[u8]>;
 
@@ -67,6 +68,9 @@ impl Kind for Thin {
     }
     fn c2r(c: c_char) -> u8 {
         c as _
+    }
+    fn char_from_u32(c: u32) -> Option<Self::Char> {
+        u8::try_from(c).ok()
     }
     fn chars_from_bytes(b: &[u8]) -> Option<&[Self::Char]> {
         Some(b)
@@ -106,6 +110,9 @@ impl Kind for Wide {
     }
     fn c2r(c: Self::C) -> Self::Char {
         c as _
+    }
+    fn char_from_u32(c: u32) -> Option<Self::Char> {
+        Some(c)
     }
     fn chars_from_bytes(_: &[u8]) -> Option<&[Self::Char]> {
         None

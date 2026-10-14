@@ -106,13 +106,7 @@ impl<'a, T: Kind> FileReader<'a, T> {
     }
 
     fn get_char_from_wint(wc: wint_t) -> Result<T::Char, i32> {
-        if let Some(wc_char) = T::chars_from_bytes(&wc.to_be_bytes())
-            && wc_char.len() == 1
-        {
-            Ok(wc_char[0])
-        } else {
-            Err(-1)
-        }
+        T::char_from_u32(wc).ok_or(-1)
     }
 }
 

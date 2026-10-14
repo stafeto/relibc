@@ -41,6 +41,17 @@ after_includes = """
 #define WEOF (0xffffffffu)
 """
 include_guard = "_RELIBC_WCHAR_H"
+trailer = """
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+long double wcstold(const wchar_t *nptr, wchar_t **endptr);
+
+#ifdef __cplusplus
+}
+#endif
+"""
 language = "C"
 style = "Type"
 no_includes = true

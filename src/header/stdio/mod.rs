@@ -383,6 +383,10 @@ impl FILE {
         }
     }
 
+    pub(crate) fn push_unget(&mut self, byte: u8) {
+        self.unget.push(byte);
+    }
+
     pub fn purge(&mut self) {
         // Purge read buffer
         self.read_pos = 0;
@@ -1020,6 +1024,11 @@ pub unsafe extern "C" fn getc_unlocked(stream: *mut FILE) -> c_int {
         return -1;
     }
 
+    unsafe { getc_raw(stream) }
+}
+
+/// A byte of the stream, whatever its orientation is.
+pub(crate) unsafe fn getc_raw(stream: *mut FILE) -> c_int {
     let mut buf = [0];
 
     match unsafe { (*stream).read(&mut buf) } {
