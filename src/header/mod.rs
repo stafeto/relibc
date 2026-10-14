@@ -107,8 +107,8 @@ pub mod ifaddrs;
 pub mod inttypes;
 // iso646.h implemented in C
 pub mod langinfo;
-// TODO: libintl.h
 pub mod libgen;
+pub mod libintl;
 pub mod limits;
 pub mod locale;
 pub mod malloc;
