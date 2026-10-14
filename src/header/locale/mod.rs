@@ -51,6 +51,13 @@ pub unsafe extern "C" fn localeconv() -> *mut lconv {
     }
 }
 
+fn is_posix_locale_name(name: &str) -> bool {
+    matches!(
+        name,
+        "" | "C" | "POSIX" | "C.UTF-8" | "C.utf8" | "POSIX.UTF-8" | "POSIX.utf8"
+    )
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/setlocale.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn setlocale(category: c_int, locale: *const c_char) -> *mut c_char {
@@ -71,7 +78,9 @@ pub unsafe extern "C" fn setlocale(category: c_int, locale: *const c_char) -> *m
 
     let name = unsafe { CStr::from_ptr(locale).to_str().unwrap_or("C") };
 
-    let locale_file = if name.is_empty() || name == "C" || name == "POSIX" {
+    // The multibyte encoding is always UTF-8, so the names of the UTF-8
+    // forms of the POSIX locale name that locale.
+    let locale_file = if is_posix_locale_name(name) {
         // TODO: name == "" should read from LANG env
         Ok(LocaleData::posix())
     } else {
@@ -119,7 +128,7 @@ pub unsafe extern "C" fn newlocale(mask: c_int, locale: *const c_char, base: loc
         .to_string_lossy()
         .into_owned();
     let name = name.as_str();
-    let mut new_locale = if name.is_empty() || name == "C" || name == "POSIX" {
+    let mut new_locale = if is_posix_locale_name(name) {
         // TODO: name == "" should read from LANG env
         Ok(LocaleData::posix())
     } else {
