@@ -15,7 +15,7 @@ use crate::{
     header::{
         bits_sigset_t::sigset_t,
         dirent::dirent,
-        errno::{EINVAL, EIO, ENOSYS},
+        errno::{EINVAL, EIO, ENOSYS, EPERM},
         fcntl::AT_EMPTY_PATH,
         poll::{nfds_t, pollfd},
         signal::{SIGCHLD, sigevent},
@@ -839,7 +839,17 @@ impl Pal for Sys {
     }
 
     fn mknodat(dir_fildes: c_int, path: CStr, mode: mode_t, dev: dev_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // Only a FIFO can be made. Regular files (open), directories (mkdir) and sockets have
+        // their own calls and device nodes need a device service: EPERM for those kinds, EINVAL
+        // for a mode that names no file type.
+        const S_IFMT: mode_t = 0o170000;
+        match mode & S_IFMT {
+            0o010000 => Self::mkfifoat(dir_fildes, path, mode & 0o7777),
+            0 | 0o040000 | 0o020000 | 0o060000 | 0o100000 | 0o120000 | 0o140000 => {
+                Err(Errno(EPERM))
+            }
+            _ => Err(Errno(EINVAL)),
+        }
     }
 
     fn mkfifoat(dir_fd: c_int, path: CStr, mode: mode_t) -> Result<()> {
