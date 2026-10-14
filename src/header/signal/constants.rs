@@ -214,3 +214,6 @@ pub const CLD_TRAPPED: i32 = 4;
 pub const CLD_STOPPED: i32 = 5;
 /// Stopped child has continued.
 pub const CLD_CONTINUED: i32 = 6;
+
+/// The size of the buffer that `sig2str` fills.
+pub const SIG2STR_MAX: usize = 32;

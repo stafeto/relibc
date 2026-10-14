@@ -9,7 +9,7 @@ use core::{
 };
 
 use crate::{
-    header::{ctype, string},
+    header::{bits_locale_t::locale_t, ctype, string},
     iter::NulTerminated,
     platform::types::{c_char, c_int, c_long, c_longlong, c_void, size_t},
 };
@@ -137,12 +137,18 @@ pub unsafe extern "C" fn strcasecmp(s1: *const c_char, s2: *const c_char) -> c_i
     inner_casecmp(zipped)
 }
 
-// TODO: needs locale_t
-// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcasecmp.html>.
-// #[unsafe(no_mangle)]
-/*pub extern "C" fn strcasecmp_l(s1: *const c_char, s2: *const c_char, locale: locale_t) -> c_int {
-    unimplemented!();
-}*/
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcasecmp_l.html>.
+///
+/// # Safety
+/// `s1` and `s2` must point to valid strings terminated by nul.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strcasecmp_l(
+    s1: *const c_char,
+    s2: *const c_char,
+    _locale: locale_t,
+) -> c_int {
+    unsafe { strcasecmp(s1, s2) }
+}
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcasecmp.html>.
 ///
@@ -168,12 +174,19 @@ pub unsafe extern "C" fn strncasecmp(s1: *const c_char, s2: *const c_char, n: si
     inner_casecmp(zipped)
 }
 
-// TODO: needs locale_t
-// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strcasecmp.html>.
-// #[unsafe(no_mangle)]
-/*pub extern "C" fn strncasecmp_l(s1: *const c_char, s2: *const c_char, n: size_t, locale: locale_t) -> c_int {
-    unimplemented!();
-}*/
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strncasecmp_l.html>.
+///
+/// # Safety
+/// `s1` and `s2` must point to valid strings terminated by nul.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strncasecmp_l(
+    s1: *const c_char,
+    s2: *const c_char,
+    n: size_t,
+    _locale: locale_t,
+) -> c_int {
+    unsafe { strncasecmp(s1, s2, n) }
+}
 
 /// Given two zipped `&c_char` iterators, either find the first comparison != 0, or return 0.
 fn inner_casecmp<'a>(iterator: impl Iterator<Item = (&'a c_char, &'a c_char)>) -> c_int {

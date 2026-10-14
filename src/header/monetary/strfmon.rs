@@ -21,6 +21,27 @@ pub unsafe extern "C" fn strfmon(
     format: *const c_char, // Format string
     mut args: ...          // Variadic arguments for monetary values
 ) -> ssize_t {
+    unsafe { strfmon_va(s, maxsize, format, &mut args) }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strfmon_l.html>.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strfmon_l(
+    s: *mut c_char,
+    maxsize: size_t,
+    _locale: crate::header::bits_locale_t::locale_t,
+    format: *const c_char,
+    mut args: ...
+) -> ssize_t {
+    unsafe { strfmon_va(s, maxsize, format, &mut args) }
+}
+
+unsafe fn strfmon_va(
+    s: *mut c_char,
+    maxsize: size_t,
+    format: *const c_char,
+    args: &mut core::ffi::VaList<'_>,
+) -> ssize_t {
     // Validate input pointers and buffer size
     if s.is_null() || format.is_null() || maxsize == 0 {
         return -1; // Invalid input

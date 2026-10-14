@@ -939,3 +939,106 @@ pub unsafe extern "C" fn psiginfo(info: *const siginfo_t, prefix: *const c_char)
         psignal((*info).si_signo, prefix);
     }
 }
+
+/// The names of the signals of this system, without the prefix SIG.
+const SIGNAL_NAMES: [(&str, usize); 31] = [
+    ("HUP", 1),
+    ("INT", 2),
+    ("QUIT", 3),
+    ("ILL", 4),
+    ("TRAP", 5),
+    ("ABRT", 6),
+    ("BUS", 7),
+    ("FPE", 8),
+    ("KILL", 9),
+    ("USR1", 10),
+    ("SEGV", 11),
+    ("USR2", 12),
+    ("PIPE", 13),
+    ("ALRM", 14),
+    ("TERM", 15),
+    ("STKFLT", 16),
+    ("CHLD", 17),
+    ("CONT", 18),
+    ("STOP", 19),
+    ("TSTP", 20),
+    ("TTIN", 21),
+    ("TTOU", 22),
+    ("URG", 23),
+    ("XCPU", 24),
+    ("XFSZ", 25),
+    ("VTALRM", 26),
+    ("PROF", 27),
+    ("WINCH", 28),
+    ("IO", 29),
+    ("PWR", 30),
+    ("SYS", 31),
+];
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sig2str.html>.
+///
+/// # Safety
+/// `str` holds `SIG2STR_MAX` characters.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sig2str(signum: c_int, str: *mut c_char) -> c_int {
+    use alloc::format;
+    let signum = signum as usize;
+    let name = if let Some((name, _)) = SIGNAL_NAMES.iter().find(|(_, n)| *n == signum) {
+        format!("{name}\0")
+    } else if signum == SIGRTMIN {
+        "RTMIN\0".into()
+    } else if signum == SIGRTMAX {
+        "RTMAX\0".into()
+    } else if signum > SIGRTMIN && signum < SIGRTMAX {
+        if signum - SIGRTMIN <= SIGRTMAX - signum {
+            format!("RTMIN+{}\0", signum - SIGRTMIN)
+        } else {
+            format!("RTMAX-{}\0", SIGRTMAX - signum)
+        }
+    } else {
+        return -1;
+    };
+    unsafe { str.copy_from_nonoverlapping(name.as_ptr().cast(), name.len()) };
+    0
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/str2sig.html>.
+///
+/// # Safety
+/// `str` ends with a null; `pnum` is writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn str2sig(str: *const c_char, pnum: *mut c_int) -> c_int {
+    let name = unsafe { crate::c_str::CStr::from_ptr(str) }.to_bytes();
+    let Ok(name) = core::str::from_utf8(name) else {
+        return -1;
+    };
+    let found = if let Some((_, n)) = SIGNAL_NAMES.iter().find(|(s, _)| *s == name) {
+        Some(*n)
+    } else if name == "RTMIN" {
+        Some(SIGRTMIN)
+    } else if name == "RTMAX" {
+        Some(SIGRTMAX)
+    } else if let Some(k) = name
+        .strip_prefix("RTMIN+")
+        .and_then(|k| k.parse::<usize>().ok())
+    {
+        (SIGRTMIN + k < SIGRTMAX).then_some(SIGRTMIN + k)
+    } else if let Some(k) = name
+        .strip_prefix("RTMAX-")
+        .and_then(|k| k.parse::<usize>().ok())
+    {
+        (k < SIGRTMAX - SIGRTMIN).then(|| SIGRTMAX - k)
+    } else {
+        // A number written in decimal names the signal.
+        name.parse::<usize>()
+            .ok()
+            .filter(|n| *n >= 1 && *n <= SIGRTMAX)
+    };
+    match found {
+        Some(n) => {
+            unsafe { *pnum = n as c_int };
+            0
+        }
+        None => -1,
+    }
+}

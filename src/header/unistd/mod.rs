@@ -63,6 +63,9 @@ mod pathconf;
 pub mod syscall;
 mod sysconf;
 
+/// The flags of `posix_close`.
+pub const POSIX_CLOSE_RESTART: c_int = 0;
+
 pub const F_OK: c_int = 0;
 pub const R_OK: c_int = 4;
 pub const W_OK: c_int = 2;
@@ -1535,4 +1538,21 @@ pub unsafe extern "C" fn write(fildes: c_int, buf: *const c_void, nbyte: size_t)
     Sys::write(fildes, buf)
         .map(|bytes| bytes as ssize_t)
         .or_minus_one_errno()
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_close.html>.
+///
+/// A descriptor is closed for good at the call, whatever the flag says, so
+/// the call is `close`.
+#[unsafe(no_mangle)]
+pub extern "C" fn posix_close(fildes: c_int, _flag: c_int) -> c_int {
+    close(fildes)
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/gethostid.html>.
+///
+/// The identifier of a host that has none of its own.
+#[unsafe(no_mangle)]
+pub extern "C" fn gethostid() -> c_long {
+    0
 }

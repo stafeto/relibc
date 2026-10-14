@@ -283,13 +283,30 @@ pub extern "C" fn readdir(dir: &mut DIR) -> *mut dirent {
 /// The `readdir_r()` function was marked obsolescent in the Open Group Base
 /// Specifications Issue 8.
 #[deprecated]
-// #[unsafe(no_mangle)]
-pub extern "C" fn readdir_r(
-    _dir: *mut DIR,
-    _entry: *mut dirent,
-    _result: *mut *mut dirent,
-) -> *mut dirent {
-    unimplemented!(); // plus, deprecated
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn readdir_r(
+    dir: *mut DIR,
+    entry: *mut dirent,
+    result: *mut *mut dirent,
+) -> c_int {
+    match unsafe { &mut *dir }.next_dirent() {
+        Ok(found) if found.is_null() => {
+            unsafe { *result = ptr::null_mut() };
+            0
+        }
+        Ok(found) => {
+            let size = unsafe { (*found).d_reclen as usize }.min(mem::size_of::<dirent>());
+            unsafe {
+                ptr::copy_nonoverlapping(found.cast::<u8>(), entry.cast::<u8>(), size);
+                *result = entry;
+            }
+            0
+        }
+        Err(Errno(e)) => {
+            unsafe { *result = ptr::null_mut() };
+            e
+        }
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/rewinddir.html>.

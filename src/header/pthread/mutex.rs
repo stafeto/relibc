@@ -246,3 +246,47 @@ impl Default for RlctMutexAttr {
         Self::default_const()
     }
 }
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_mutex_clocklock.html>.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_mutex_clocklock(
+    mutex: *mut pthread_mutex_t,
+    clock_id: crate::platform::types::clockid_t,
+    abstime: &timespec,
+) -> c_int {
+    use crate::header::time::{CLOCK_MONOTONIC, CLOCK_REALTIME, clock_gettime};
+    if clock_id == CLOCK_REALTIME {
+        return unsafe { pthread_mutex_timedlock(mutex, abstime) };
+    }
+    if clock_id != CLOCK_MONOTONIC {
+        return crate::header::errno::EINVAL;
+    }
+    // The deadline is moved to the calendar by the time that is left to it.
+    let mut monotonic = timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let mut realtime = timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe {
+        clock_gettime(CLOCK_MONOTONIC, &mut monotonic);
+        clock_gettime(CLOCK_REALTIME, &mut realtime);
+    }
+    let mut sec = abstime.tv_sec - monotonic.tv_sec + realtime.tv_sec;
+    let mut nsec = abstime.tv_nsec - monotonic.tv_nsec + realtime.tv_nsec;
+    if nsec < 0 {
+        nsec += 1_000_000_000;
+        sec -= 1;
+    }
+    if nsec >= 1_000_000_000 {
+        nsec -= 1_000_000_000;
+        sec += 1;
+    }
+    let deadline = timespec {
+        tv_sec: sec,
+        tv_nsec: nsec,
+    };
+    unsafe { pthread_mutex_timedlock(mutex, &deadline) }
+}

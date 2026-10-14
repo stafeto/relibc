@@ -181,3 +181,18 @@ pub(crate) fn load_locale_file(name: &str) -> Result<Box<LocaleData>, Errno> {
     let toml = PosixLocaleDef::parse(&content);
     Ok(LocaleData::new(CString::from_str(name).unwrap(), toml))
 }
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getlocalename_l.html>.
+///
+/// # Safety
+/// `locale` is `LC_GLOBAL_LOCALE` or a locale made by `newlocale` or `duplocale`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getlocalename_l(category: c_int, locale: locale_t) -> *const c_char {
+    if locale == LC_GLOBAL_LOCALE {
+        return unsafe { setlocale(category, ptr::null()) };
+    }
+    if locale.is_null() {
+        return ptr::null();
+    }
+    unsafe { (*locale.cast::<LocaleData>()).name.as_ptr() }
+}

@@ -977,3 +977,18 @@ pub(crate) fn timespec_realtime_to_monotonic(abstime: &timespec) -> Result<times
     };
     Ok(relative)
 }
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strftime_l.html>.
+///
+/// # Safety
+/// The pointers are those of `strftime`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strftime_l(
+    s: *mut c_char,
+    maxsize: size_t,
+    format: *const c_char,
+    timeptr: *const tm,
+    _locale: crate::header::bits_locale_t::locale_t,
+) -> size_t {
+    unsafe { strftime(s, maxsize, format, timeptr) }
+}

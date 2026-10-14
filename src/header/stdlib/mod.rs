@@ -458,6 +458,19 @@ unsafe fn find_env(search: *const c_char) -> Option<(usize, *mut c_char)> {
     None
 }
 
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/secure_getenv.html>.
+///
+/// The environment is not consulted by a program that runs with the privileges
+/// of another user than the one who started it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn secure_getenv(name: *const c_char) -> *mut c_char {
+    use crate::header::unistd::{getegid, geteuid, getgid, getuid};
+    if getuid() != geteuid() || getgid() != getegid() {
+        return ptr::null_mut();
+    }
+    unsafe { getenv(name) }
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getenv.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
@@ -1509,7 +1522,9 @@ pub fn detect_base(s: CStr) -> Option<(c_int, CStr)> {
 
     Some(match (first, adv1.split_first()) {
         (b'0', Some((b'x' | b'X', adv2)))
-            if adv2.split_first().is_some_and(|(digit, _)| digit.is_ascii_hexdigit()) =>
+            if adv2
+                .split_first()
+                .is_some_and(|(digit, _)| digit.is_ascii_hexdigit()) =>
         {
             (16, adv2)
         }
