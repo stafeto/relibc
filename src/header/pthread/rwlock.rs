@@ -140,7 +140,7 @@ pub unsafe extern "C" fn pthread_rwlockattr_setpshared(
         return EINVAL;
     };
 
-    (unsafe { *attr.cast::<RlctRwlockAttr>() }).pshared = pshared;
+    unsafe { (*attr.cast::<RlctRwlockAttr>()).pshared = pshared };
     0
 }
 

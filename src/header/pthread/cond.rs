@@ -316,7 +316,7 @@ pub unsafe extern "C" fn pthread_condattr_setclock(
     clock_id: clockid_t,
 ) -> c_int {
     // TODO return EINVAL if clock_id is invalid or a CPU-time clock
-    (unsafe { *attr.cast::<RlctCondAttr>() }).clock = clock_id;
+    unsafe { (*attr.cast::<RlctCondAttr>()).clock = clock_id };
     0
 }
 
@@ -337,7 +337,7 @@ pub unsafe extern "C" fn pthread_condattr_setpshared(
 ) -> c_int {
     match pshared {
         PTHREAD_PROCESS_SHARED | PTHREAD_PROCESS_PRIVATE => {
-            (unsafe { *attr.cast::<RlctCondAttr>() }).pshared = pshared;
+            unsafe { (*attr.cast::<RlctCondAttr>()).pshared = pshared };
             0
         }
         _ => crate::header::errno::EINVAL,
