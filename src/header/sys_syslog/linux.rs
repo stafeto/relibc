@@ -1,15 +1,16 @@
+#[cfg(not(stafeto))]
+use crate::header::{
+    sys_socket::{
+        connect,
+        constants::{AF_UNIX, SOCK_CLOEXEC, SOCK_DGRAM},
+        sockaddr, socket,
+    },
+    sys_un::sockaddr_un,
+    unistd::close,
+};
 use crate::{
     error::{Errno, Result},
     fs::File,
-    header::{
-        sys_socket::{
-            connect,
-            constants::{AF_UNIX, SOCK_CLOEXEC, SOCK_DGRAM},
-            sockaddr, socket,
-        },
-        sys_un::sockaddr_un,
-        unistd::close,
-    },
     io::BufWriter,
     platform::ERRNO,
 };
@@ -29,7 +30,7 @@ impl LogSink for LogFile {
     where
         Self: Sized,
     {
-        let fd = unsafe { crate::header::unistd::dup(2) };
+        let fd = crate::header::unistd::dup(2);
         if fd < 0 {
             return Err(Errno(ERRNO.get()));
         }
