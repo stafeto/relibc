@@ -251,7 +251,12 @@ pub unsafe extern "C" fn thrd_exit(ret: c_int) -> ! {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/thrd_join.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn thrd_join(thrd: thrd_t, retval: *mut c_int) -> c_int {
-    if unsafe { pthread_join(thrd, retval.cast::<*mut c_void>()) } == 0 {
+    // The pthread function stores a pointer; the caller's place holds an int.
+    let mut value: *mut c_void = core::ptr::null_mut();
+    if unsafe { pthread_join(thrd, &raw mut value) } == 0 {
+        if !retval.is_null() {
+            unsafe { *retval = value as usize as c_int };
+        }
         thrd_success
     } else {
         thrd_error
