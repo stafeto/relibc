@@ -102,7 +102,7 @@ pub mod ftw;
 pub mod getopt;
 pub mod glob;
 pub mod grp;
-// TODO: iconv.h
+pub mod iconv;
 pub mod ifaddrs;
 pub mod inttypes;
 // iso646.h implemented in C
