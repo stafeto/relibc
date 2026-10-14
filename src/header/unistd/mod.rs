@@ -631,11 +631,6 @@ pub unsafe extern "C" fn getgroups(size: c_int, list: *mut gid_t) -> c_int {
     .or_minus_one_errno()
 }
 
-/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/gethostid.html>.
-// #[unsafe(no_mangle)]
-pub extern "C" fn gethostid() -> c_long {
-    unimplemented!();
-}
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/gethostname.html>.
 #[unsafe(no_mangle)]
@@ -1538,15 +1533,6 @@ pub unsafe extern "C" fn write(fildes: c_int, buf: *const c_void, nbyte: size_t)
     Sys::write(fildes, buf)
         .map(|bytes| bytes as ssize_t)
         .or_minus_one_errno()
-}
-
-/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_close.html>.
-///
-/// A descriptor is closed for good at the call, whatever the flag says, so
-/// the call is `close`.
-#[unsafe(no_mangle)]
-pub extern "C" fn posix_close(fildes: c_int, _flag: c_int) -> c_int {
-    close(fildes)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/gethostid.html>.

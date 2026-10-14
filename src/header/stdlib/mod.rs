@@ -1355,13 +1355,6 @@ pub unsafe extern "C" fn realpath(pathname: *const c_char, resolved: *mut c_char
     }
 }
 
-/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getenv.html>.
-// #[unsafe(no_mangle)]
-#[expect(unused_variables, reason = "function not yet implemented")]
-pub unsafe extern "C" fn secure_getenv(name: *const c_char) -> *mut c_char {
-    unimplemented!();
-}
-
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/drand48.html>.
 ///
 /// # Safety
