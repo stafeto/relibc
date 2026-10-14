@@ -1,0 +1,13 @@
+# POSIX header spec: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/wordexp.h.html
+#
+# Spec quotations relating to includes:
+# - "The <wordexp.h> header shall define the size_t type as described in <stddef.h>."
+sys_includes = ["stddef.h"]
+include_guard = "_RELIBC_WORDEXP_H"
+language = "C"
+style = "Type"
+no_includes = true
+cpp_compat = true
+
+[enum]
+prefix_with_name = true

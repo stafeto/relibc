@@ -209,7 +209,7 @@ pub mod utmp;
 // TODO: varargs.h (deprecated)
 pub mod wchar;
 pub mod wctype;
-// TODO: wordexp.h
+pub mod wordexp;
 // TODO: xti.h (deprecated)
 #[cfg(target_os = "redox")]
 pub mod redox_ring;
