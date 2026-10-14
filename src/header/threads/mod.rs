@@ -20,10 +20,7 @@ use super::{
     sched::sched_yield,
     time::{CLOCK_REALTIME, clock_nanosleep, timespec},
 };
-use crate::platform::{
-    ERRNO,
-    types::{c_int, c_long, c_void},
-};
+use crate::platform::types::{c_int, c_long, c_void};
 use core::mem::MaybeUninit;
 
 pub type thrd_t = bits_pthread::pthread_t;
@@ -97,7 +94,7 @@ pub unsafe extern "C" fn cnd_timedwait(
     mtx: *mut mtx_t,
     timeout: *const timespec,
 ) -> c_int {
-    ERRNO.set(0);
+    // The pthread functions answer with the error number.
     let ret = unsafe {
         pthread_cond_timedwait(
             cnd.cast::<pthread_cond_t>(),
@@ -105,10 +102,9 @@ pub unsafe extern "C" fn cnd_timedwait(
             timeout,
         )
     };
-    let new_errno = ERRNO.get();
     match ret {
         0 => thrd_success,
-        _ if new_errno == ETIMEDOUT => thrd_timedout,
+        ETIMEDOUT => thrd_timedout,
         _ => thrd_error,
     }
 }
@@ -172,12 +168,10 @@ pub unsafe extern "C" fn mtx_lock(mtx: *mut mtx_t) -> c_int {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/mtx_timedlock.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mtx_timedlock(mtx: *mut mtx_t, timeout: &timespec) -> c_int {
-    ERRNO.set(0);
     let ret = unsafe { pthread_mutex_timedlock(mtx.cast::<pthread_mutex_t>(), timeout) };
-    let new_errno = ERRNO.get();
     match ret {
         0 => thrd_success,
-        _ if new_errno == ETIMEDOUT => thrd_timedout,
+        ETIMEDOUT => thrd_timedout,
         _ => thrd_error,
     }
 }
@@ -185,12 +179,10 @@ pub unsafe extern "C" fn mtx_timedlock(mtx: *mut mtx_t, timeout: &timespec) -> c
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/mtx_trylock.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mtx_trylock(mtx: *mut mtx_t) -> c_int {
-    ERRNO.set(0);
     let ret = unsafe { pthread_mutex_trylock(mtx.cast::<pthread_mutex_t>()) };
-    let new_errno = ERRNO.get();
     match ret {
         0 => thrd_success,
-        _ if new_errno == EBUSY => thrd_busy,
+        EBUSY => thrd_busy,
         _ => thrd_error,
     }
 }
@@ -212,7 +204,6 @@ pub unsafe extern "C" fn thrd_create(
     start: thrd_start_t,
     arg: *mut c_void,
 ) -> c_int {
-    ERRNO.set(0);
     let ret = unsafe {
         pthread_create(
             thrd,
@@ -222,10 +213,9 @@ pub unsafe extern "C" fn thrd_create(
             arg,
         )
     };
-    let new_errno = ERRNO.get();
     match ret {
         0 => thrd_success,
-        _ if new_errno == ENOMEM => thrd_nomem,
+        ENOMEM => thrd_nomem,
         _ => thrd_error,
     }
 }
@@ -271,12 +261,9 @@ pub unsafe extern "C" fn thrd_join(thrd: thrd_t, retval: *mut c_int) -> c_int {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/thrd_sleep.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn thrd_sleep(time1: &timespec, time2: *mut timespec) -> c_int {
-    ERRNO.set(0);
-    let ret = clock_nanosleep(CLOCK_REALTIME, 0, time1, time2);
-    let new_errno = ERRNO.get();
-    match ret {
+    match clock_nanosleep(CLOCK_REALTIME, 0, time1, time2) {
         0 => 0,
-        -1 if new_errno == EINTR => -1,
+        EINTR => -1,
         _ => -2,
     }
 }
