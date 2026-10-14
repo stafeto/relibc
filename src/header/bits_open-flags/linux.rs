@@ -20,6 +20,12 @@ pub const O_TRUNC: c_int = 0x0200;
 pub const O_APPEND: c_int = 0x0400;
 /// Non-blocking mode.
 pub const O_NONBLOCK: c_int = 0x0800;
+/// Write I/O operations complete as for synchronized I/O data integrity.
+pub const O_DSYNC: c_int = 0x1000;
+/// Write I/O operations complete as for synchronized I/O file integrity.
+pub const O_SYNC: c_int = 0x10_1000;
+/// Read I/O operations complete at the level of the synchronization asked.
+pub const O_RSYNC: c_int = O_SYNC;
 /// Fail if file is a non-directory file.
 #[cfg(not(target_arch = "aarch64"))]
 pub const O_DIRECTORY: c_int = 0x1_0000;
