@@ -22,6 +22,21 @@ pub struct LogFile(BufWriter<File>);
 impl LogSink for LogFile {
     type Sink = BufWriter<File>;
 
+    // No log daemon runs on stafeto: the messages go to the standard error, as
+    // they do on a system whose log is the console.
+    #[cfg(stafeto)]
+    fn open() -> Result<Self>
+    where
+        Self: Sized,
+    {
+        let fd = unsafe { crate::header::unistd::dup(2) };
+        if fd < 0 {
+            return Err(Errno(ERRNO.get()));
+        }
+        Ok(Self(BufWriter::new(File::new(fd))))
+    }
+
+    #[cfg(not(stafeto))]
     fn open() -> Result<Self>
     where
         Self: Sized,
