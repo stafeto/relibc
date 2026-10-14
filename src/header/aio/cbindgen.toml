@@ -11,7 +11,7 @@
 # signal.h brings in bits/pthread-t.h bringing in pthread_t from sys/types.h
 # signal.h brings in bits/pthreadattr-t.h bringing in pthread_attr_t from sys/types.h
 # signal.h brings in size_t from sys/types.h
-sys_includes = ["signal.h"]
+sys_includes = ["signal.h", "time.h"]
 after_includes = """
 #include <bits/off-t.h>   // for off_t from sys/types.h
 #include <bits/ssize-t.h> // for ssize_t from sys/types.h
@@ -24,3 +24,7 @@ cpp_compat = true
 
 [enum]
 prefix_with_name = true
+
+[export.rename]
+"sigevent" = "struct sigevent"
+"timespec" = "struct timespec"
