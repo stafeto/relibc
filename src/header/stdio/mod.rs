@@ -51,6 +51,7 @@ mod getdelim;
 
 mod ext;
 mod helpers;
+pub mod memstream;
 pub mod printf;
 pub mod reader;
 pub mod scanf;
@@ -243,6 +244,9 @@ pub struct FILE {
 
     // wchar support
     pub(crate) orientation: c_int,
+
+    // A stream over memory (fmemopen, open_memstream) and where its buffer is
+    pub(crate) mem: Option<memstream::MemKind>,
 }
 
 impl Read for FILE {
@@ -501,6 +505,7 @@ pub unsafe extern "C" fn fclose(stream: *mut FILE) -> c_int {
     unsafe { flockfile(stream) };
 
     let mut r = stream.flush().is_err();
+    r = r || !stream.sync_memory();
     // TODO: better error handling
     let close = Sys::close(*stream.file).map(|()| 0).or_minus_one_errno() == -1;
     r = r || close;
@@ -564,7 +569,7 @@ pub unsafe extern "C" fn fflush(stream: *mut FILE) -> c_int {
         }
     } else {
         let mut stream = unsafe { (*stream).lock() };
-        if stream.flush().is_err() {
+        if stream.flush().is_err() || !stream.sync_memory() {
             return EOF;
         }
     }
@@ -887,7 +892,7 @@ pub unsafe fn fseek_locked(stream: &mut FILE, mut off: off_t, whence: c_int) -> 
     }
 
     // Flush write buffer before seek
-    if stream.flush().is_err() {
+    if stream.flush().is_err() || !stream.sync_memory() {
         return -1;
     }
 

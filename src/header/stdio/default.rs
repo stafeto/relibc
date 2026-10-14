@@ -31,6 +31,7 @@ impl GlobalFile {
             pid: None,
 
             orientation: 0,
+            mem: None,
         }))
     }
     pub const fn get(&self) -> *mut FILE {

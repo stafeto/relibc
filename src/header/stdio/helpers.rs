@@ -96,5 +96,6 @@ pub fn _fdopen(fd: c_int, mode: CStr) -> Result<Box<FILE>, Errno> {
         writer: super::FileInnerWriter::Buf(writer),
         pid: None,
         orientation: 0,
+        mem: None,
     }))
 }

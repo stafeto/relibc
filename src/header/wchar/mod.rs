@@ -9,7 +9,7 @@ use crate::{
     header::{
         ctype::isspace,
         errno::{EILSEQ, EINVAL, ENOMEM, ERANGE},
-        stdio::*,
+        stdio::{memstream, *},
         stdlib::{MB_CUR_MAX, MB_LEN_MAX, malloc},
         string,
         time::tm,
@@ -179,6 +179,15 @@ pub unsafe extern "C" fn fputws(ws: *const wchar_t, stream: *mut FILE) -> c_int 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwide(stream: *mut FILE, mode: c_int) -> c_int {
     unsafe { (*stream).try_set_orientation(mode) }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/open_wmemstream.html>.
+///
+/// # Safety
+/// `bufp` and `sizep` point to places that stay valid while the stream is open.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn open_wmemstream(bufp: *mut *mut wchar_t, sizep: *mut size_t) -> *mut FILE {
+    unsafe { memstream::open_wide(bufp, sizep) }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fwscanf.html>.
