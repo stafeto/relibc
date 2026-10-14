@@ -282,7 +282,6 @@ pub extern "C" fn readdir(dir: &mut DIR) -> *mut dirent {
 /// # Deprecation
 /// The `readdir_r()` function was marked obsolescent in the Open Group Base
 /// Specifications Issue 8.
-#[deprecated]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn readdir_r(
     dir: *mut DIR,
