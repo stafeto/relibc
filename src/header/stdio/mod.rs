@@ -526,9 +526,13 @@ pub unsafe extern "C" fn fclose(stream: *mut FILE) -> c_int {
     r = r || close;
 
     if stream.flags & constants::F_PERM == 0 {
-        // Not one of stdin, stdout or stderr
-        untrack(stream);
-        let mut stream = unsafe { Box::from_raw(stream) };
+        // Not one of stdin, stdout or stderr. The list is locked after the
+        // stream is let go, as `fflush(NULL)` takes the list and then each
+        // stream; the stream is freed once no walk of the list can reach it.
+        let raw: *mut FILE = stream;
+        unsafe { funlockfile(raw) };
+        untrack(raw);
+        let mut stream = unsafe { Box::from_raw(raw) };
         // Reference files aren't closed on drop, so pretend to be a reference
         stream.file.reference = true;
     } else {
@@ -579,13 +583,15 @@ pub unsafe extern "C" fn fflush(stream: *mut FILE) -> c_int {
         // fdopen, popen and the memory streams made.
         let mut failed = unsafe { fflush(stdout) } != 0;
         failed |= unsafe { fflush(stderr) } != 0;
-        let mut at = 0;
-        while let Some(open) = open_stream(at) {
-            let mut stream = unsafe { (*open).lock() };
+        // The list stays locked for the walk, so that no stream is freed or
+        // moved in it meanwhile (`fclose` takes the list after its stream).
+        let open = OPEN_STREAMS.lock();
+        for &open in open.iter() {
+            let mut stream = unsafe { (*(open as *mut FILE)).lock() };
             failed |= stream.flush().is_err() || !stream.sync_memory();
             drop(stream);
-            at += 1;
         }
+        drop(open);
         if failed {
             return EOF;
         }
@@ -1848,7 +1854,8 @@ fn untrack(stream: *mut FILE) {
     }
 }
 
-/// The open stream at `at` of the list, if there is one.
+/// The open stream at `at` of the list, if there is one (exit, which runs
+/// with one thread and no lock held).
 fn open_stream(at: usize) -> Option<*mut FILE> {
     OPEN_STREAMS.lock().get(at).map(|&s| s as *mut FILE)
 }
