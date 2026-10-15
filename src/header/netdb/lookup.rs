@@ -123,7 +123,33 @@ pub fn lookup_host(host: &str) -> Result<LookupHost, Errno> {
     Ok(addrs)
 }
 
+/// The names `/etc/hosts` gives to the IPv4 address `addr`.
+fn hosts_names(addr: &in_addr) -> Vec<Vec<u8>> {
+    use crate::{fs::File, header::fcntl, io::Read};
+    let mut text = alloc::string::String::new();
+    let Ok(mut file) = File::open(c"/etc/hosts".into(), fcntl::O_RDONLY) else {
+        return Vec::new();
+    };
+    if file.read_to_string(&mut text).is_err() {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("");
+        let mut words = line.split_whitespace();
+        if words.next().and_then(parse_ipv4_string) == Some(addr.s_addr) {
+            found.extend(words.map(|name| name.as_bytes().to_vec()));
+        }
+    }
+    found
+}
+
 pub fn lookup_addr(addr: &in_addr) -> Result<Vec<Vec<u8>>, Errno> {
+    // The hosts file answers before the name server is asked.
+    let known = hosts_names(addr);
+    if !known.is_empty() {
+        return Ok(known);
+    }
     let dns_string = get_dns_server()?;
 
     if let Some(dns_addr) = parse_ipv4_string(&dns_string) {
@@ -167,9 +193,10 @@ pub fn lookup_addr(addr: &in_addr) -> Result<Vec<Vec<u8>>, Errno> {
 
         let _bytes_sent = Sys::sendto(sock, &packet_data, 0, None)?;
 
-        let mut buf = [0u8; 65536];
+        // On the heap: a frame of 64 KiB is the whole stack of a small thread.
+        let mut buf = vec![0u8; 65536];
 
-        let (count, _dstaddr_len) = Sys::recvfrom(sock, Out::from_mut(&mut buf), 0, None)?;
+        let (count, _dstaddr_len) = Sys::recvfrom(sock, Out::from_mut(buf.as_mut_slice()), 0, None)?;
 
         match Dns::parse(&buf[..count]) {
             Ok(response) => {

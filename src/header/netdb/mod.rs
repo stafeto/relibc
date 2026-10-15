@@ -6,7 +6,12 @@ mod dns;
 
 use core::{cell::Cell, fmt::Write, mem, net::Ipv4Addr, ptr, str};
 
-use alloc::{boxed::Box, str::SplitWhitespace, string::ToString, vec::Vec};
+use alloc::{
+    boxed::Box,
+    str::SplitWhitespace,
+    string::{String, ToString},
+    vec::Vec,
+};
 
 use crate::{
     c_str::{CStr, OwnedThinCStr},
@@ -17,10 +22,13 @@ use crate::{
         bits_safamily_t::sa_family_t,
         errno::ENOENT,
         fcntl::O_RDONLY,
-        netinet_in::{in_addr, sockaddr_in},
+        netinet_in::{IPPROTO_TCP, IPPROTO_UDP, in_addr, sockaddr_in},
         stdlib::atoi,
         strings::strcasecmp,
-        sys_socket::{constants::AF_INET, sockaddr, socklen_t},
+        sys_socket::{
+            constants::{AF_INET, AF_UNSPEC, SOCK_DGRAM, SOCK_STREAM},
+            sockaddr, socklen_t,
+        },
         unistd::SEEK_SET,
     },
     platform::{
@@ -951,13 +959,29 @@ fn getaddrinfo_inner(
     let ai_socktype = hints_opt.map_or(0, |hints| hints.ai_socktype);
     let mut ai_protocol; // = hints_opt.map_or(0, |hints| hints.ai_protocol);
 
+    let family_hint = hints_opt.map_or(AF_UNSPEC, |hints| hints.ai_family);
+    if family_hint != AF_UNSPEC && family_hint != AF_INET {
+        return Err(AddrInfoErr::EAI_FAMILY);
+    }
     let mut port = 0;
     if let Some(service) = service_opt {
-        //TODO: Support other service definitions as well as AI_NUMERICSERV
-        if let Ok(service) = str::from_utf8(service.to_bytes())
-            && let Ok(ok) = service.parse::<u16>()
-        {
+        let text = str::from_utf8(service.to_bytes()).map_err(|_| AddrInfoErr::EAI_SERVICE)?;
+        if let Ok(ok) = text.parse::<u16>() {
             port = ok;
+        } else if ai_flags & AI_NUMERICSERV != 0 {
+            return Err(AddrInfoErr::EAI_NONAME);
+        } else {
+            // A name of /etc/services, of the protocol the socket type needs.
+            let proto = match ai_socktype {
+                SOCK_STREAM => c"tcp".as_ptr(),
+                SOCK_DGRAM => c"udp".as_ptr(),
+                _ => ptr::null(),
+            };
+            let entry = unsafe { getservbyname(service.to_bytes_with_nul().as_ptr().cast(), proto) };
+            if entry.is_null() {
+                return Err(AddrInfoErr::EAI_SERVICE);
+            }
+            port = u16::from_be(unsafe { (*entry).s_port } as u16);
         }
     }
     let node_cstr = node_opt.unwrap_or_else(|| {
@@ -983,7 +1007,11 @@ fn getaddrinfo_inner(
 
     for in_addr in lookuphost {
         ai_family = AF_INET;
-        ai_protocol = 0;
+        ai_protocol = match ai_socktype {
+            SOCK_STREAM => c_int::from(IPPROTO_TCP),
+            SOCK_DGRAM => c_int::from(IPPROTO_UDP),
+            _ => 0,
+        };
 
         let mut sockaddr = vec![0_u8; size_of::<sockaddr_in>()].into_boxed_slice();
 
@@ -1097,8 +1125,25 @@ pub unsafe extern "C" fn getnameinfo(
             };
             unsafe { *serv.add(port_bytes.len()) = 0 };
         } else {
-            // TODO: Implement service name lookup (e.g., from /etc/services)
-            unsafe { *serv = 0 };
+            // The name of /etc/services, else the number.
+            let proto = if flags & NI_DGRAM != 0 { c"udp" } else { c"tcp" };
+            let entry = unsafe { getservbyport(c_int::from(sa.sin_port), proto.as_ptr()) };
+            let text: String = if entry.is_null() {
+                u16::from_be(sa.sin_port).to_string()
+            } else {
+                unsafe { core::ffi::CStr::from_ptr((*entry).s_name) }
+                    .to_str()
+                    .unwrap_or("")
+                    .to_string()
+            };
+            let bytes = text.as_bytes();
+            if (servlen as usize) <= bytes.len() {
+                return EAI_MEMORY;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), serv, bytes.len());
+                *serv.add(bytes.len()) = 0;
+            }
         }
     }
 

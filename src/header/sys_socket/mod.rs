@@ -204,6 +204,41 @@ pub unsafe extern "C" fn accept(
     )
 }
 
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/accept.html>.
+#[cfg(stafeto)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn accept4(
+    socket: c_int,
+    address: *mut sockaddr,
+    address_len: *mut socklen_t,
+    flags: c_int,
+) -> c_int {
+    let dst = if address.is_null() || address_len.is_null() {
+        None
+    } else {
+        Some(unsafe {
+            let len: usize = address_len.read().try_into().unwrap();
+            core::slice::from_raw_parts_mut(address.cast::<u8>(), len)
+        })
+    };
+    match Sys::accept4(socket, dst, flags) {
+        Ok((result, true_len)) => {
+            if let Some(len_out) = unsafe { address_len.as_mut() } {
+                *len_out = true_len;
+            }
+            result
+        }
+        Err(err) => Err(err).or_minus_one_errno(),
+    }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sockatmark.html>.
+#[cfg(stafeto)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sockatmark(socket: c_int) -> c_int {
+    Sys::sockatmark(socket).or_minus_one_errno()
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/bind.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bind(
