@@ -15,7 +15,7 @@ use crate::{
     header::{
         bits_sigset_t::sigset_t,
         dirent::dirent,
-        errno::{EINVAL, EIO, ENOSYS, EPERM},
+        errno::{EFBIG, EINVAL, EIO, ENOSYS, EPERM},
         fcntl::AT_EMPTY_PATH,
         poll::{nfds_t, pollfd},
         signal::{SIGCHLD, sigevent},
@@ -791,14 +791,36 @@ impl Pal for Sys {
         egid: Option<Out<gid_t>>,
         sgid: Option<Out<gid_t>>,
     ) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The process service keeps no saved identifier: it is the effective one.
+        let (real, effective) = (unsafe { stafeto_getgid() }, unsafe { stafeto_getegid() });
+        if let Some(mut out) = rgid {
+            out.write(real);
+        }
+        if let Some(mut out) = egid {
+            out.write(effective);
+        }
+        if let Some(mut out) = sgid {
+            out.write(effective);
+        }
+        Ok(())
     }
     fn getresuid(
         ruid: Option<Out<uid_t>>,
         euid: Option<Out<uid_t>>,
         suid: Option<Out<uid_t>>,
     ) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The process service keeps no saved identifier: it is the effective one.
+        let (real, effective) = (unsafe { stafeto_getuid() }, unsafe { stafeto_geteuid() });
+        if let Some(mut out) = ruid {
+            out.write(real);
+        }
+        if let Some(mut out) = euid {
+            out.write(effective);
+        }
+        if let Some(mut out) = suid {
+            out.write(effective);
+        }
+        Ok(())
     }
 
     unsafe fn setrlimit(resource: c_int, rlimit: *const rlimit) -> Result<()> {
@@ -857,11 +879,13 @@ impl Pal for Sys {
     }
 
     unsafe fn mlock(addr: *const c_void, len: usize) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The memory of a process is resident: it is never paged out.
+        Ok(())
     }
 
     unsafe fn mlockall(flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The memory of a process is resident: it is never paged out.
+        Ok(())
     }
 
     unsafe fn mmap(
@@ -917,11 +941,13 @@ impl Pal for Sys {
     }
 
     unsafe fn munlock(addr: *const c_void, len: usize) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The memory of a process is resident: it is never paged out.
+        Ok(())
     }
 
     unsafe fn munlockall() -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The memory of a process is resident: it is never paged out.
+        Ok(())
     }
 
     unsafe fn munmap(addr: *mut c_void, len: usize) -> Result<()> {
@@ -949,7 +975,18 @@ impl Pal for Sys {
     }
 
     fn posix_fallocate(fd: c_int, offset: u64, length: NonZeroU64) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // Space is taken by growing the file to the end of the range.
+        let end = offset
+            .checked_add(length.get())
+            .and_then(|end| off_t::try_from(end).ok())
+            .ok_or(Errno(EFBIG))?;
+        let mut info = core::mem::MaybeUninit::<stat>::uninit();
+        Self::fstat(fd, Out::from_uninit_mut(&mut info))?;
+        let size = unsafe { info.assume_init() }.st_size;
+        if size < end {
+            Self::ftruncate(fd, end)?;
+        }
+        Ok(())
     }
 
     fn posix_getdents(fildes: c_int, buf: &mut [u8]) -> Result<usize> {
@@ -1067,10 +1104,28 @@ impl Pal for Sys {
     }
 
     fn setresgid(rgid: gid_t, egid: gid_t, sgid: gid_t) -> Result<()> {
+        // A call that asks for what the process has changes nothing.
+        let keep = gid_t::MAX;
+        let (real, effective) = (unsafe { stafeto_getgid() }, unsafe { stafeto_getegid() });
+        if (rgid == keep || rgid == real)
+            && (egid == keep || egid == effective)
+            && (sgid == keep || sgid == effective)
+        {
+            return Ok(());
+        }
         ret(unsafe { stafeto_setresgid(rgid, egid, sgid) } as isize).map(|_| ())
     }
 
     fn setresuid(ruid: uid_t, euid: uid_t, suid: uid_t) -> Result<()> {
+        // A call that asks for what the process has changes nothing.
+        let keep = uid_t::MAX;
+        let (real, effective) = (unsafe { stafeto_getuid() }, unsafe { stafeto_geteuid() });
+        if (ruid == keep || ruid == real)
+            && (euid == keep || euid == effective)
+            && (suid == keep || suid == effective)
+        {
+            return Ok(());
+        }
         ret(unsafe { stafeto_setresuid(ruid, euid, suid) } as isize).map(|_| ())
     }
 

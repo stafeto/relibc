@@ -120,7 +120,9 @@ pub unsafe extern "C" fn fcntl(fildes: c_int, cmd: c_int, mut __valist: ...) -> 
     // c_ulonglong
     let arg = match cmd {
         F_DUPFD | F_SETFD | F_SETFL | F_GETLK | F_SETLK | F_SETLKW | F_OFD_GETLK | F_OFD_SETLK
-        | F_OFD_SETLKW | F_DUPFD_CLOEXEC | F_DUPFD_CLOFORK => unsafe { __valist.next_arg::<c_ulonglong>() },
+        | F_OFD_SETLKW | F_DUPFD_CLOEXEC | F_DUPFD_CLOFORK => unsafe {
+            __valist.next_arg::<c_ulonglong>()
+        },
         _ => 0,
     };
 
@@ -200,4 +202,35 @@ pub unsafe extern "C" fn posix_fallocate(fd: c_int, offset: off_t, len: off_t) -
         .err()
         .map(|e| e.0)
         .unwrap_or_default()
+}
+
+pub const POSIX_FADV_NORMAL: c_int = 0;
+pub const POSIX_FADV_RANDOM: c_int = 1;
+pub const POSIX_FADV_SEQUENTIAL: c_int = 2;
+pub const POSIX_FADV_WILLNEED: c_int = 3;
+pub const POSIX_FADV_DONTNEED: c_int = 4;
+pub const POSIX_FADV_NOREUSE: c_int = 5;
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_fadvise.html>.
+///
+/// The files are in memory, so the advice has nothing to change; it is
+/// checked and ignored. Upon success, returns `0`; upon failure, the error
+/// number.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn posix_fadvise(
+    fd: c_int,
+    offset: off_t,
+    len: off_t,
+    advice: c_int,
+) -> c_int {
+    if offset < 0 || len < 0 {
+        return EINVAL;
+    }
+    if !(POSIX_FADV_NORMAL..=POSIX_FADV_NOREUSE).contains(&advice) {
+        return EINVAL;
+    }
+    if unsafe { fcntl(fd, F_GETFL, 0) } < 0 {
+        return crate::header::errno::EBADF;
+    }
+    0
 }
