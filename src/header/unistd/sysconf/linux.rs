@@ -143,7 +143,6 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         _SC_FSYNC => -1,
         _SC_BARRIERS
         | _SC_MONOTONIC_CLOCK
-        | _SC_REALTIME_SIGNALS
         | _SC_SPAWN
         | _SC_THREADS
         | _SC_THREAD_ATTR_STACKADDR
@@ -178,7 +177,8 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // the platform has no such service. The XSI option is not claimed;
         // the Shell and Utilities volume (_SC_2_VERSION) waits for the
         // utilities of 5n.
-        _SC_ASYNCHRONOUS_IO
+        _SC_REALTIME_SIGNALS
+        | _SC_ASYNCHRONOUS_IO
         | _SC_MAPPED_FILES
         | _SC_MEMLOCK
         | _SC_MEMLOCK_RANGE
