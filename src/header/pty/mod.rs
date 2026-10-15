@@ -80,7 +80,7 @@ pub unsafe extern "C" fn openpty(
     }
 
     if !winp.is_null() {
-        unsafe { sys_ioctl::ioctl(slave, sys_ioctl::TIOCSWINSZ, winp as *mut c_void) };
+        unsafe { sys_ioctl::ioctl_ptr(slave, sys_ioctl::TIOCSWINSZ, winp as *mut c_void) };
     }
 
     unsafe { *amaster = master };

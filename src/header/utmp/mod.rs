@@ -16,7 +16,7 @@ pub unsafe extern "C" fn login_tty(fd: c_int) -> c_int {
     // Set controlling terminal
     let mut arg: c_int = 0;
     if unsafe {
-        sys_ioctl::ioctl(
+        sys_ioctl::ioctl_ptr(
             fd,
             sys_ioctl::TIOCSCTTY,
             core::ptr::from_mut::<c_int>(&mut arg).cast::<c_void>(),

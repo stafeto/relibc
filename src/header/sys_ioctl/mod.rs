@@ -28,9 +28,17 @@ pub struct sgttyb {
 /// Upon success, usually returns `0`. A few operations use the return value
 /// as an output parameter and returns a nonnegative value on success. Upon
 /// failure, `-1` is returned and errno set to indicate the error.
+///
+/// The prototype is variadic, as on Linux: a request that takes no argument
+/// (TIOCNOTTY) is called with two, and the third is read as a pointer word.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, out: *mut c_void) -> c_int {
-    // TODO: Somehow support varargs to syscall??
+pub unsafe extern "C" fn ioctl(fd: c_int, request: c_ulong, mut __valist: ...) -> c_int {
+    let out: *mut c_void = unsafe { __valist.next_arg::<*mut c_void>() };
+    unsafe { ioctl_ptr(fd, request, out) }
+}
+
+/// The ioctl of the C library's own code, with the pointer word typed.
+pub(crate) unsafe fn ioctl_ptr(fd: c_int, request: c_ulong, out: *mut c_void) -> c_int {
     #[cfg(target_os = "linux")]
     unsafe {
         crate::platform::Sys::ioctl(fd, request, out).or_minus_one_errno()
