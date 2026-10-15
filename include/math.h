@@ -1,3 +1,8 @@
+/* The Bessel functions j0, j1, jn, y0, y1 and yn are of the XSI option. */
+#ifndef __XSI_VISIBLE
+#define __XSI_VISIBLE 700
+#endif
+
 #include <openlibm_math.h>
 
 // Missing typedefs
