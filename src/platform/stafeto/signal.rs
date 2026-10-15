@@ -31,6 +31,7 @@ use crate::{
 // numbers relibc uses: `struct sigaction`, a 64-bit sigset_t, siginfo_t.
 unsafe extern "C" {
     fn stafeto_sigaction(sig: c_int, act: *const sigaction, old: *mut sigaction) -> c_int;
+    fn stafeto_sigaltstack(new: *const stack_t, old: *mut stack_t) -> c_int;
     fn stafeto_sigprocmask(how: c_int, set: *const sigset_t, old: *mut sigset_t) -> c_int;
     fn stafeto_sigpending(set: *mut sigset_t) -> c_int;
     fn stafeto_sigsuspend(mask: *const sigset_t) -> c_int;
@@ -95,7 +96,9 @@ impl PalSignal for Sys {
     }
 
     unsafe fn sigaltstack(ss: Option<&stack_t>, old_ss: Option<&mut stack_t>) -> Result<()> {
-        Err(Errno(ENOSYS))
+        let new = ss.map_or(ptr::null(), ptr::from_ref);
+        let old = old_ss.map_or(ptr::null_mut(), ptr::from_mut);
+        ret(unsafe { stafeto_sigaltstack(new, old) }).map(|_| ())
     }
 
     fn sigpending(set: &mut sigset_t) -> Result<()> {

@@ -135,9 +135,19 @@ pub const SS_DISABLE: usize = 2;
 // Redox note: should include both SigStack size, and some extra room for the libc handler
 // Linux note: Those two should be updated from kernel headers
 /// Minimum stack size for a signal handler.
+#[cfg(not(stafeto))]
 pub const MINSIGSTKSZ: usize = 2048;
 /// Default size in bytes for the alternate signal stack.
+#[cfg(not(stafeto))]
 pub const SIGSTKSZ: usize = 8096;
+/// stafeto: the frame of the entry distributor (1,904 bytes), the layer's
+/// delivery with the ucontext of an SA_SIGINFO handler, and room for the
+/// handler; `sigaltstack` refuses a smaller stack with ENOMEM.
+#[cfg(stafeto)]
+pub const MINSIGSTKSZ: usize = 12288;
+/// Default size in bytes for the alternate signal stack.
+#[cfg(stafeto)]
+pub const SIGSTKSZ: usize = 32768;
 
 /// Signal sent by `sigqueue()`.
 pub const SI_QUEUE: i32 = -1;
