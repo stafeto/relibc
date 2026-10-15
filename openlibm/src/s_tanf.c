@@ -33,8 +33,8 @@ t2pio2 = 2*M_PI_2,			/* 0x400921FB, 0x54442D18 */
 t3pio2 = 3*M_PI_2,			/* 0x4012D97C, 0x7F3321D2 */
 t4pio2 = 4*M_PI_2;			/* 0x401921FB, 0x54442D18 */
 
-OLM_DLLEXPORT float
-tanf(float x)
+static float
+tanf_orig(float x)
 {
 	double y;
 	int32_t n, hx, ix;
@@ -69,4 +69,12 @@ tanf(float x)
 	    /* integer parameter: 1 -- n even; -1 -- n odd */
 	    return __kernel_tandf(y,1-((n&1)<<1));
 	}
+}
+
+OLM_DLLEXPORT float
+tanf(float x)
+{
+	if (isfinite(x) && fabsf(x) > 0x1p-12f)
+		return (float)tan((double)x);
+	return tanf_orig(x);
 }

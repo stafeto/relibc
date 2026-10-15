@@ -11,6 +11,7 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/e_fmodl.c,v 1.2 2008/07/31 20:09:47 das Exp $");
 
 #include <float.h>
@@ -62,8 +63,8 @@ static const long double one = 1.0, Zero[] = {0.0, -0.0,};
  * - The high part of the mantissa fits in an int64_t with enough room
  *   for an explicit integer bit in front of the fractional bits.
  */
-OLM_DLLEXPORT long double
-fmodl(long double x, long double y)
+static long double
+fmodl_orig(long double x, long double y)
 {
 	union IEEEl2bits ux, uy;
 	int64_t hx,hz;	/* We need a carry bit even if LDBL_MANH_SIZE is 32. */
@@ -147,4 +148,12 @@ fmodl(long double x, long double y)
 	}
 	x = ux.e * one;		/* create necessary signal */
 	return x;		/* exact output */
+}
+
+OLM_DLLEXPORT long double
+fmodl(long double x, long double y)
+{
+	if (!LD_ISNAN(x) && !LD_ISNAN(y) && (LD_ISINF(x) || y == 0.0L))
+		return ld_invalid();
+	return fmodl_orig(x, y);
 }

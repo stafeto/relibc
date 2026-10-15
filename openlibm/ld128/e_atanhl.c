@@ -29,6 +29,7 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
@@ -36,8 +37,8 @@ static const long double one = 1.0L, huge = 1e4900L;
 
 static const long double zero = 0.0L;
 
-long double
-atanhl(long double x)
+static long double
+atanhl_orig(long double x)
 {
 	long double t;
 	u_int32_t jx, ix;
@@ -62,4 +63,14 @@ atanhl(long double x)
 	} else
 	    t = 0.5*log1pl((u.value+u.value)/(one-u.value));
 	if(jx & 0x80000000) return -t; else return t;
+}
+
+OLM_DLLEXPORT long double
+atanhl(long double x)
+{
+	if (__builtin_fabsl(x) > 1.0L)
+		return ld_invalid();
+	if (__builtin_fabsl(x) == 1.0L)
+		return ld_divzero(x);
+	return atanhl_orig(x);
 }

@@ -60,6 +60,7 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
@@ -140,8 +141,8 @@ static const long double
   cp_h = 9.6179669392597555432899980587535537779331E-1L,
   cp_l = 5.0577616648125906047157785230014751039424E-17L;
 
-long double
-powl(long double x, long double y)
+static long double
+powl_orig(long double x, long double y)
 {
   long double z, ax, z_h, z_l, p_h, p_l;
   long double yy1, t1, t2, r, s, t, u, v, w;
@@ -436,4 +437,27 @@ powl(long double x, long double y)
       z = o.value;
     }
   return s * z;
+}
+
+OLM_DLLEXPORT long double
+powl(long double x, long double y)
+{
+	long double r;
+
+	if (!LD_ISNAN(x) && !LD_ISNAN(y)) {
+		if (x < 0.0L && !LD_ISINF(x) && !LD_ISINF(y) &&
+		    __builtin_floorl(y) != y)
+			return ld_invalid();
+		if (x == 0.0L && y < 0.0L)
+			return ld_divzero((ld_odd_integer(y) &&
+			    __builtin_signbit(x)) ? -1.0L : 1.0L);
+	}
+	r = powl_orig(x, y);
+	if (!LD_ISNAN(x) && !LD_ISNAN(y) && !LD_ISINF(x) && !LD_ISINF(y)) {
+		if (LD_ISINF(r))
+			feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+		else if (r == 0.0L && x != 0.0L)
+			feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+	}
+	return r;
 }

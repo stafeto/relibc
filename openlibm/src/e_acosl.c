@@ -13,6 +13,7 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/e_acosl.c,v 1.2 2008/08/02 03:56:22 das Exp $");
 
 /*
@@ -40,8 +41,8 @@ static const long double
 pi =  3.14159265358979323846264338327950280e+00L;
 #endif
 
-OLM_DLLEXPORT long double
-acosl(long double x)
+static long double
+acosl_orig(long double x)
 {
 	union IEEEl2bits u;
 	long double z,p,q,r,w,s,c,df;
@@ -84,4 +85,12 @@ acosl(long double x)
 	    w = r*s+c;
 	    return 2.0*(df+w);
 	}
+}
+
+OLM_DLLEXPORT long double
+acosl(long double x)
+{
+	if (!LD_ISNAN(x) && __builtin_fabsl(x) > 1.0L)
+		return ld_invalid();
+	return acosl_orig(x);
 }

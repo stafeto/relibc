@@ -41,8 +41,8 @@
 static const double one = 1.0, huge = 1e300;
 static const double zero = 0.0;
 
-OLM_DLLEXPORT double
-__ieee754_atanh(double x)
+static double
+__ieee754_atanh_orig(double x)
 {
 	double t;
 	int32_t hx,ix;
@@ -66,3 +66,11 @@ __ieee754_atanh(double x)
 #if (LDBL_MANT_DIG == 53)
 openlibm_weak_reference(atanh, atanhl);
 #endif
+
+OLM_DLLEXPORT double
+__ieee754_atanh(double x)
+{
+	if (isfinite(x) && fabs(x) < 1.0 && fabs(x) > 0x1p-28)
+		return (double)atanhl((long double)x);
+	return __ieee754_atanh_orig(x);
+}

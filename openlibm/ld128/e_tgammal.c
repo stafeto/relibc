@@ -17,11 +17,12 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
-long double
-tgammal(long double x)
+static long double
+tgammal_orig(long double x)
 {
 	int64_t i0,i1;
 
@@ -35,5 +36,20 @@ tgammal(long double x)
 	if (i0==0xffff000000000000ULL && i1==0)
 		return (x-x);
 
-	return expl(lgammal(x));
+	{
+		int sign;
+		long double r = expl(lgammal_r(x, &sign));
+
+		return sign < 0 ? -r : r;
+	}
+}
+
+OLM_DLLEXPORT long double
+tgammal(long double x)
+{
+	if (x == 0.0L)
+		return ld_divzero(x);
+	if (x < 0.0L && (LD_ISINF(x) || __builtin_floorl(x) == x))
+		return ld_invalid();
+	return tgammal_orig(x);
 }

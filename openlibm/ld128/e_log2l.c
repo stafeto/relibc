@@ -59,6 +59,7 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
@@ -170,8 +171,8 @@ deval (long double x, const long double *p, int n)
 
 
 
-long double
-log2l(long double x)
+static long double
+log2l_orig(long double x)
 {
   long double z;
   long double y;
@@ -245,4 +246,14 @@ done:
   z += x;
   z += e;
   return (z);
+}
+
+OLM_DLLEXPORT long double
+log2l(long double x)
+{
+	if (x < 0.0L)
+		return ld_invalid();
+	if (x == 0.0L)
+		return ld_divzero(-1.0L);
+	return log2l_orig(x);
 }

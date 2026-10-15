@@ -70,6 +70,7 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
@@ -755,8 +756,8 @@ deval (long double x, const long double *p, int n)
 }
 
 
-long double
-lgammal_r(long double x, int *signgamp)
+static long double
+lgammal_r_orig(long double x, int *signgamp)
 {
   long double p, q, w, z, nx;
   int i, nn;
@@ -1034,4 +1035,14 @@ lgammal_r(long double x, int *signgamp)
   p = 1.0L / (x * x);
   q += neval (p, RASY, NRASY) / x;
   return (q);
+}
+
+OLM_DLLEXPORT long double
+lgammal_r(long double x, int *signgamp)
+{
+	if (x == 0.0L || (x < 0.0L && !LD_ISINF(x) && __builtin_floorl(x) == x)) {
+		*signgamp = __builtin_signbit(x) ? -1 : 1;
+		return ld_divzero(1.0L);
+	}
+	return lgammal_r_orig(x, signgamp);
 }

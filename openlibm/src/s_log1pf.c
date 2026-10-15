@@ -35,8 +35,8 @@ Lp7 = 1.4798198640e-01; /* 3E178897 */
 
 static const float zero = 0.0;
 
-OLM_DLLEXPORT float
-log1pf(float x)
+static float
+log1pf_orig(float x)
 {
 	float hfsq,f,c,s,z,R,u;
 	int32_t k,hx,hu,ax;
@@ -111,4 +111,12 @@ log1pf(float x)
 	R = z*(Lp1+z*(Lp2+z*(Lp3+z*(Lp4+z*(Lp5+z*(Lp6+z*Lp7))))));
 	if(k==0) return f-(hfsq-s*(hfsq+R)); else
 		 return k*ln2_hi-((hfsq-(s*(hfsq+R)+(k*ln2_lo+c)))-f);
+}
+
+OLM_DLLEXPORT float
+log1pf(float x)
+{
+	if (isfinite(x) && x > -1.0f && fabsf(x) > 0x1p-12f)
+		return (float)log1p((double)x);
+	return log1pf_orig(x);
 }

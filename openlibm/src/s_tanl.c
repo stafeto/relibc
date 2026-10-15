@@ -25,6 +25,7 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/s_tanl.c,v 1.3 2011/05/30 19:41:28 kargl Exp $");
 
 /*
@@ -45,8 +46,8 @@
 #error "Unsupported long double format"
 #endif
 
-OLM_DLLEXPORT long double
-tanl(long double x)
+static long double
+tanl_orig(long double x)
 {
 	union IEEEl2bits z;
 	int e0, s;
@@ -87,4 +88,12 @@ tanl(long double x)
 	}
 
 	return (hi);
+}
+
+OLM_DLLEXPORT long double
+tanl(long double x)
+{
+	if (LD_ISINF(x))
+		return ld_invalid();
+	return tanl_orig(x);
 }

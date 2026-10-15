@@ -202,8 +202,8 @@ static const double zero=  0.00000000000000000000e+00;
 }
 
 
-OLM_DLLEXPORT double
-__ieee754_lgamma_r(double x, int *signgamp)
+static double
+__ieee754_lgamma_r_orig(double x, int *signgamp)
 {
 	double t,y,z,nadj,p,p1,p2,p3,q,r,w;
 	int32_t hx;
@@ -295,4 +295,14 @@ __ieee754_lgamma_r(double x, int *signgamp)
 	    r =  x*(__ieee754_log(x)-one);
 	if(hx<0) r = nadj - r;
 	return r;
+}
+
+OLM_DLLEXPORT double
+__ieee754_lgamma_r(double x, int *signgamp)
+{
+	if (isfinite(x) && fabs(x) > 0x1p-30 && !(x < 0 && x == trunc(x))) {
+		long double r = lgammal_r((long double)x, signgamp);
+		return (double)r;
+	}
+	return __ieee754_lgamma_r_orig(x, signgamp);
 }

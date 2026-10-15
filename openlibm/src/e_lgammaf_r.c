@@ -135,8 +135,8 @@ static const float zero=  0.0000000000e+00;
 }
 
 
-OLM_DLLEXPORT float
-__ieee754_lgammaf_r(float x, int *signgamp)
+static float
+__ieee754_lgammaf_r_orig(float x, int *signgamp)
 {
 	float t,y,z,nadj,p,p1,p2,p3,q,r,w;
 	int32_t hx;
@@ -228,4 +228,14 @@ __ieee754_lgammaf_r(float x, int *signgamp)
 	    r =  x*(__ieee754_logf(x)-one);
 	if(hx<0) r = nadj - r;
 	return r;
+}
+
+OLM_DLLEXPORT float
+__ieee754_lgammaf_r(float x, int *signgamp)
+{
+	if (isfinite(x) && fabsf(x) > 0x1p-12f && !(x < 0 && x == truncf(x))) {
+		double r = lgamma_r((double)x, signgamp);
+		return (float)r;
+	}
+	return __ieee754_lgammaf_r_orig(x, signgamp);
 }

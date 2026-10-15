@@ -25,6 +25,7 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
@@ -32,8 +33,8 @@ static const long double
 one	= 1.0,
 ln2	= 0.6931471805599453094172321214581766L;
 
-long double
-acoshl(long double x)
+static long double
+acoshl_orig(long double x)
 {
 	long double t;
 	u_int64_t lx;
@@ -55,4 +56,12 @@ acoshl(long double x)
 	    t = x-one;
 	    return log1pl(t+sqrtl(2.0L*t+t*t));
 	}
+}
+
+OLM_DLLEXPORT long double
+acoshl(long double x)
+{
+	if (x < 1.0L)
+		return ld_invalid();
+	return acoshl_orig(x);
 }

@@ -19,6 +19,7 @@
 
 #include "fpmath.h"
 #include "math_private.h"
+#include <openlibm_fenv.h>
 
 OLM_DLLEXPORT int
 ilogbl(long double x)
@@ -29,8 +30,10 @@ ilogbl(long double x)
 
 	u.e = x;
 	if (u.bits.exp == 0) {
-		if ((u.bits.manl | u.bits.manh) == 0)
+		if ((u.bits.manl | u.bits.manh) == 0) {
+			feraiseexcept(FE_INVALID);
 			return (FP_ILOGB0);
+		}
 		/* denormalized */
 		if (u.bits.manh == 0) {
 			m = 1lu << (LDBL_MANL_SIZE - 1);
@@ -47,8 +50,11 @@ ilogbl(long double x)
 		return (LDBL_MIN_EXP - b - 1);
 	} else if (u.bits.exp < (LDBL_MAX_EXP << 1) - 1)
 		return (u.bits.exp - LDBL_MAX_EXP + 1);
-	else if (u.bits.manl != 0 || u.bits.manh != 0)
+	else if (u.bits.manl != 0 || u.bits.manh != 0) {
+		feraiseexcept(FE_INVALID);
 		return (FP_ILOGBNAN);
-	else
+	} else {
+		feraiseexcept(FE_INVALID);
 		return (INT_MAX);
+	}
 }

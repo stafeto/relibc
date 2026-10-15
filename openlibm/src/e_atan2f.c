@@ -30,8 +30,8 @@ pi      = 3.1415927410e+00; /* 0x40490fdb */
 static volatile float
 pi_lo   = -8.7422776573e-08; /* 0xb3bbbd2e */
 
-OLM_DLLEXPORT float
-__ieee754_atan2f(float y, float x)
+static float
+__ieee754_atan2f_orig(float y, float x)
 {
 	float z;
 	int32_t k,m,hx,hy,ix,iy;
@@ -94,4 +94,14 @@ __ieee754_atan2f(float y, float x)
 	    default: /* case 3 */
 	    	    return  (z-pi_lo)-pi;/* atan(-,-) */
 	}
+}
+
+/* Computed in double and rounded once: the result is the correctly rounded
+ * one but for the rarest of cases. */
+OLM_DLLEXPORT float
+__ieee754_atan2f(float y, float x)
+{
+	if (isfinite(x) && isfinite(y) && x != 0 && y != 0)
+		return (float)atan2((double)y, (double)x);
+	return __ieee754_atan2f_orig(y, x);
 }

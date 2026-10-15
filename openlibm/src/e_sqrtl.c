@@ -25,6 +25,7 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/e_sqrtl.c,v 1.1 2008/03/02 01:47:58 das Exp $");
 
 #include <float.h>
@@ -75,8 +76,8 @@ dec(long double x)
  * if possible.
  */
 
-OLM_DLLEXPORT long double
-sqrtl(long double x)
+static long double
+sqrtl_orig(long double x)
 {
 	union IEEEl2bits u;
 	int k, r;
@@ -159,4 +160,12 @@ sqrtl(long double x)
 	feupdateenv(&env);	/* Restore env and raise inexact */
 	u.bits.exp--;
 	return (u.e);
+}
+
+OLM_DLLEXPORT long double
+sqrtl(long double x)
+{
+	if (x < 0.0L)
+		return ld_invalid();
+	return sqrtl_orig(x);
 }

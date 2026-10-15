@@ -13,6 +13,7 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/e_asinl.c,v 1.2 2008/08/03 17:49:05 das Exp $");
 
 /*
@@ -30,8 +31,8 @@ static const long double
 one =  1.00000000000000000000e+00,
 huge = 1.000e+300;
 
-OLM_DLLEXPORT long double
-asinl(long double x)
+static long double
+asinl_orig(long double x)
 {
 	union IEEEl2bits u;
 	long double t=0.0,w,p,q,c,r,s;
@@ -74,4 +75,12 @@ asinl(long double x)
 	    t  = pio4_hi-(p-q);
 	}    
 	if(expsign>0) return t; else return -t;    
+}
+
+OLM_DLLEXPORT long double
+asinl(long double x)
+{
+	if (!LD_ISNAN(x) && __builtin_fabsl(x) > 1.0L)
+		return ld_invalid();
+	return asinl_orig(x);
 }

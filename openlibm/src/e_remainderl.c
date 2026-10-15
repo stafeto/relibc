@@ -25,15 +25,24 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/e_remainderl.c,v 1.1 2008/03/30 20:47:42 das Exp $");
 
 #include <openlibm_math.h>
 #include "math_private.h"
 
-OLM_DLLEXPORT long double
-remainderl(long double x, long double y)
+static long double
+remainderl_orig(long double x, long double y)
 {
 	int quo;
 
 	return (remquol(x, y, &quo));
+}
+
+OLM_DLLEXPORT long double
+remainderl(long double x, long double y)
+{
+	if (!LD_ISNAN(x) && !LD_ISNAN(y) && (LD_ISINF(x) || y == 0.0L))
+		return ld_invalid();
+	return remainderl_orig(x, y);
 }

@@ -25,6 +25,7 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/s_fmal.c,v 1.7 2011/10/21 06:30:43 das Exp $");
 
 #include <float.h>
@@ -163,8 +164,8 @@ dd_mul(long double a, long double b)
  *	Dekker, T.  A Floating-Point Technique for Extending the
  *	Available Precision.  Numer. Math. 18, 224-242 (1971).
  */
-OLM_DLLEXPORT long double
-fmal(long double x, long double y, long double z)
+static long double
+fmal_orig(long double x, long double y, long double z)
 {
 	long double xs, ys, zs, adj;
 	struct dd xy, r;
@@ -266,4 +267,22 @@ fmal(long double x, long double y, long double z)
 		return (ldexpl(r.hi + adj, spread));
 	else
 		return (add_and_denormalize(r.hi, adj, spread));
+}
+
+OLM_DLLEXPORT long double
+fmal(long double x, long double y, long double z)
+{
+	long double r;
+
+	if (!LD_ISNAN(x) && !LD_ISNAN(y) &&
+	    ((x == 0.0L && LD_ISINF(y)) || (LD_ISINF(x) && y == 0.0L)))
+		return ld_invalid();
+	if (!LD_ISNAN(x) && !LD_ISNAN(y) && (LD_ISINF(x) || LD_ISINF(y)) &&
+	    LD_ISINF(z) && ((x < 0.0L) != (y < 0.0L)) != (z < 0.0L))
+		return ld_invalid();
+	r = fmal_orig(x, y, z);
+	if (LD_ISINF(r) && !LD_ISINF(x) && !LD_ISINF(y) && !LD_ISINF(z) &&
+	    !LD_ISNAN(x) && !LD_ISNAN(y) && !LD_ISNAN(z))
+		feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+	return r;
 }

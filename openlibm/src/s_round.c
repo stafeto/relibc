@@ -38,7 +38,7 @@ round(double x)
 	uint32_t hx;
 
 	GET_HIGH_WORD(hx, x);
-	if ((hx & 0x7fffffff) == 0x7ff00000)
+	if ((hx & 0x7fffffff) >= 0x7ff00000)
 		return (x + x);
 
 	if (!(hx & 0x80000000)) {

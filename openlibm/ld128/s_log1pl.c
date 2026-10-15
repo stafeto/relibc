@@ -55,6 +55,7 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
@@ -120,8 +121,8 @@ static const long double sqrth = 0.7071067811865475244008443621048490392848L;
 /* ln (2^16384 * (1 - 2^-113)) */
 static const long double zero = 0.0L;
 
-long double
-log1pl(long double xm1)
+static long double
+log1pl_orig(long double xm1)
 {
   long double x, y, z, r, s;
   ieee_quad_shape_type u;
@@ -244,4 +245,14 @@ log1pl(long double xm1)
   z = z + x;
   z = z + e * C1;
   return (z);
+}
+
+OLM_DLLEXPORT long double
+log1pl(long double x)
+{
+	if (x < -1.0L)
+		return ld_invalid();
+	if (x == -1.0L)
+		return ld_divzero(-1.0L);
+	return log1pl_orig(x);
 }

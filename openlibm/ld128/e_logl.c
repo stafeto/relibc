@@ -61,6 +61,7 @@
  */
 
 #include <openlibm_math.h>
+#include "ld_flags.h"
 
 #include "math_private.h"
 
@@ -186,8 +187,8 @@ static const long double
   ln2a = 6.93145751953125e-1L,
   ln2b = 1.4286068203094172321214581765680755001344E-6L;
 
-long double
-logl(long double x)
+static long double
+logl_orig(long double x)
 {
   long double z, y, w;
   ieee_quad_shape_type u, t;
@@ -280,4 +281,14 @@ logl(long double x)
   y += (t.value - 1.0L);
   y += e * ln2a;
   return y;
+}
+
+OLM_DLLEXPORT long double
+logl(long double x)
+{
+	if (x < 0.0L)
+		return ld_invalid();
+	if (x == 0.0L)
+		return ld_divzero(-1.0L);
+	return logl_orig(x);
 }

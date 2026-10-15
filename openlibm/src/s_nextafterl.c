@@ -11,6 +11,7 @@
  */
 
 #include "cdefs-compat.h"
+#include "ld_flags.h"
 //__FBSDID("$FreeBSD: src/lib/msun/src/s_nextafterl.c,v 1.2 2008/02/22 02:30:36 das Exp $");
 
 /* IEEE functions
@@ -30,8 +31,8 @@
 #error "Unsupported long double format"
 #endif
 
-OLM_DLLEXPORT long double
-nextafterl(long double x, long double y)
+static long double
+nextafterl_orig(long double x, long double y)
 {
 	volatile long double t;
 	union IEEEl2bits ux, uy;
@@ -75,6 +76,20 @@ nextafterl(long double x, long double y)
 		return ux.e;
 	}
 	return ux.e;
+}
+
+OLM_DLLEXPORT long double
+nextafterl(long double x, long double y)
+{
+	long double r = nextafterl_orig(x, y);
+
+	if (!LD_ISNAN(x) && !LD_ISNAN(y) && x != y) {
+		if (LD_ISINF(r) && !LD_ISINF(x))
+			feraiseexcept(FE_OVERFLOW | FE_INEXACT);
+		else if (__builtin_fabsl(r) < LDBL_MIN)
+			feraiseexcept(FE_UNDERFLOW | FE_INEXACT);
+	}
+	return r;
 }
 
 openlibm_strong_reference(nextafterl, nexttowardl);
