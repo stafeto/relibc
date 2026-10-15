@@ -10,13 +10,14 @@ use crate::{
     header::{
         errno::{EAGAIN, EBADF, EINVAL, EIO},
         fcntl::{F_GETFL, fcntl},
-        signal::{SIGEV_SIGNAL, kill, sigevent},
+        pthread::{pthread_create, pthread_detach},
+        signal::{SIGEV_SIGNAL, SIGEV_THREAD, kill, sigevent, sigval},
         time::timespec,
         unistd::{fdatasync, fsync, getpid, pread, pwrite},
     },
     platform::{
         self,
-        types::{c_int, c_void, off_t, size_t, ssize_t},
+        types::{c_int, c_void, off_t, pthread_t, size_t, ssize_t},
     },
 };
 
@@ -47,12 +48,44 @@ pub struct aiocb {
     __return: ssize_t,
 }
 
-/// Tells of the end of the request as its sigevent asks.
-unsafe fn notify(aiocbp: *mut aiocb) {
-    let event = unsafe { &(*aiocbp).aio_sigevent };
+/// Tells of the end as a sigevent asks: a signal to the process, or the
+/// function of SIGEV_THREAD run in a thread of its own.
+unsafe fn notify_event(event: &sigevent) {
     if event.sigev_notify == SIGEV_SIGNAL && event.sigev_signo != 0 {
         kill(getpid(), event.sigev_signo);
     }
+    #[cfg(stafeto)]
+    if event.sigev_notify == SIGEV_THREAD
+        && let Some(function) = event.sigev_notify_function
+    {
+        extern "C" fn run(arg: *mut c_void) -> *mut c_void {
+            let call = unsafe {
+                alloc::boxed::Box::from_raw(arg.cast::<(extern "C" fn(sigval), sigval)>())
+            };
+            (call.0)(call.1);
+            core::ptr::null_mut()
+        }
+        let call =
+            alloc::boxed::Box::into_raw(alloc::boxed::Box::new((function, event.sigev_value)));
+        let mut thread = core::mem::MaybeUninit::<pthread_t>::uninit();
+        let made = unsafe {
+            pthread_create(
+                thread.as_mut_ptr(),
+                event.sigev_notify_attributes.cast_const().cast(),
+                run,
+                call.cast(),
+            )
+        };
+        if made == 0 {
+            unsafe { pthread_detach(thread.assume_init()) };
+        } else {
+            drop(unsafe { alloc::boxed::Box::from_raw(call) });
+        }
+    }
+}
+
+unsafe fn notify(aiocbp: *mut aiocb) {
+    unsafe { notify_event(&(*aiocbp).aio_sigevent) };
 }
 
 /// Carries the request out; `operation` is LIO_READ or LIO_WRITE.
@@ -150,8 +183,8 @@ pub unsafe extern "C" fn lio_listio(
             }
         }
     }
-    if !sig.is_null() && mode == LIO_NOWAIT && unsafe { (*sig).sigev_notify } == SIGEV_SIGNAL {
-        kill(getpid(), unsafe { (*sig).sigev_signo });
+    if !sig.is_null() && mode == LIO_NOWAIT {
+        unsafe { notify_event(&*sig) };
     }
     if failed {
         platform::ERRNO.set(EIO);
