@@ -1538,8 +1538,13 @@ pub fn convert_octal(s: CStr) -> Option<(c_ulong, CStr, bool)> {
 pub fn convert_hex(s: CStr) -> Option<(c_ulong, CStr, bool)> {
     let (first, next) = s.split_first()?;
 
+    // The prefix 0x counts only before a hexadecimal digit: "0x" alone is the
+    // number 0 and ends after the zero.
     if first == b'0'
         && let Some((b'x' | b'X', next)) = next.split_first()
+        && next
+            .split_first()
+            .is_some_and(|(digit, _)| digit.is_ascii_hexdigit())
     {
         convert_integer(next, 16)
     } else {
