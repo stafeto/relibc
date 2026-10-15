@@ -303,6 +303,7 @@ impl Write for FILE {
         let room = self.memory_room(buf.len());
         if room < buf.len() {
             self.flags |= F_ERR;
+            platform::ERRNO.set(crate::header::errno::ENOSPC);
             if room == 0 {
                 return Err(io::Error::from_raw_os_error(crate::header::errno::ENOSPC));
             }
