@@ -65,8 +65,18 @@ unsafe extern "C" {
         new: *const itimerspec,
         old: *mut itimerspec,
     ) -> c_int;
-    fn stafeto_mmap_anonymous(len: usize) -> *mut c_void;
+    fn stafeto_mmap(
+        addr: *mut c_void,
+        len: usize,
+        prot: c_int,
+        flags: c_int,
+        fd: c_int,
+        offset: i64,
+    ) -> isize;
     fn stafeto_munmap(addr: *mut c_void, len: usize) -> c_int;
+    fn stafeto_mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
+    fn stafeto_msync(addr: *mut c_void, len: usize, flags: c_int) -> c_int;
+    fn stafeto_map_check(addr: *const c_void, len: usize) -> c_int;
     fn stafeto_getpid() -> pid_t;
     fn stafeto_getppid() -> pid_t;
     /// pipe2: the read end and the write end of a new pipe of the pipe
@@ -895,11 +905,18 @@ impl Pal for Sys {
     }
 
     unsafe fn mlock(addr: *const c_void, len: usize) -> Result<()> {
-        // The memory of a process is resident: it is never paged out.
-        Ok(())
+        // The memory of a process is resident: it is never paged out, so
+        // only the range is checked.
+        ret(unsafe { stafeto_map_check(addr, len) } as isize).map(|_| ())
     }
 
     unsafe fn mlockall(flags: c_int) -> Result<()> {
+        if flags & !(crate::header::sys_mman::MCL_CURRENT | crate::header::sys_mman::MCL_FUTURE)
+            != 0
+            || flags == 0
+        {
+            return Err(Errno(EINVAL));
+        }
         // The memory of a process is resident: it is never paged out.
         Ok(())
     }
@@ -915,26 +932,17 @@ impl Pal for Sys {
         if len == 0 {
             return Err(Errno(EINVAL));
         }
-        // POSIX mmap: EINVAL when neither MAP_PRIVATE nor MAP_SHARED is set;
-        // ENOTSUP for a flag the implementation does not support. A shared
-        // anonymous mapping must stay shared with a forked child, and the
-        // layer has no shared memory yet, so MAP_SHARED is refused.
+        // POSIX mmap: EINVAL when neither MAP_PRIVATE nor MAP_SHARED is set
+        // (or both are); the layer checks the rest.
         let kinds = crate::header::sys_mman::MAP_PRIVATE | crate::header::sys_mman::MAP_SHARED;
-        if flags & kinds == 0 {
+        if flags & kinds == 0 || flags & kinds == kinds {
             return Err(Errno(EINVAL));
         }
-        if flags & crate::header::sys_mman::MAP_SHARED != 0 {
-            return Err(Errno(crate::header::errno::ENOTSUP));
-        }
-        // Anonymous private memory only, from the layer's heap.
-        if fildes != -1 || flags & crate::header::sys_mman::MAP_ANONYMOUS == 0 || !addr.is_null() {
-            return Err(Errno(ENOSYS));
-        }
-        let pointer = unsafe { stafeto_mmap_anonymous(len) };
-        if pointer.is_null() {
-            Err(Errno(crate::header::errno::ENOMEM))
+        let address = unsafe { stafeto_mmap(addr, len, prot, flags, fildes, off as i64) };
+        if (-4095..0).contains(&address) {
+            Err(Errno((-address) as c_int))
         } else {
-            Ok(pointer)
+            Ok(address as *mut c_void)
         }
     }
 
@@ -949,16 +957,16 @@ impl Pal for Sys {
     }
 
     unsafe fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_mprotect(addr, len, prot) } as isize).map(|_| ())
     }
 
     unsafe fn msync(addr: *mut c_void, len: usize, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_msync(addr, len, flags) } as isize).map(|_| ())
     }
 
     unsafe fn munlock(addr: *const c_void, len: usize) -> Result<()> {
         // The memory of a process is resident: it is never paged out.
-        Ok(())
+        ret(unsafe { stafeto_map_check(addr, len) } as isize).map(|_| ())
     }
 
     unsafe fn munlockall() -> Result<()> {
@@ -971,7 +979,12 @@ impl Pal for Sys {
     }
 
     unsafe fn madvise(addr: *mut c_void, len: usize, flags: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // Advice changes nothing in a memory that is always resident; the
+        // range and the advice are checked.
+        if !(0..=4).contains(&flags) {
+            return Err(Errno(EINVAL));
+        }
+        ret(unsafe { stafeto_map_check(addr, len) } as isize).map(|_| ())
     }
 
     unsafe fn nanosleep(rqtp: *const timespec, rmtp: *mut timespec) -> Result<()> {
