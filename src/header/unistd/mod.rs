@@ -1363,7 +1363,7 @@ pub extern "C" fn sync() {
 #[unsafe(no_mangle)]
 pub extern "C" fn tcgetpgrp(fildes: c_int) -> pid_t {
     let mut pgrp = 0;
-    if unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TIOCGPGRP, (&raw mut pgrp).cast()) } < 0 {
+    if unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TIOCGPGRP, (&raw mut pgrp).cast()) } < 0 {
         return -1;
     }
     pgrp
@@ -1383,7 +1383,7 @@ pub extern "C" fn tcgetpgrp(fildes: c_int) -> pid_t {
 /// indicate the error.
 #[unsafe(no_mangle)]
 pub extern "C" fn tcsetpgrp(fildes: c_int, pgid_id: pid_t) -> c_int {
-    if unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TIOCSPGRP, &raw const pgid_id as _) } < 0 {
+    if unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TIOCSPGRP, &raw const pgid_id as _) } < 0 {
         return -1;
     }
     0

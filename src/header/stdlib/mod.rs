@@ -22,7 +22,7 @@ use crate::{
         stdio::flush_io_streams,
         stdlib::sort::{QsortContext, QsortRContext},
         string::{strlen, strncmp},
-        sys_ioctl::{TIOCGPTN, TIOCSPTLCK, ioctl},
+        sys_ioctl::{TIOCGPTN, TIOCSPTLCK, ioctl_ptr as ioctl},
         time::constants::CLOCK_MONOTONIC,
         unistd::{self, _SC_PAGESIZE, sysconf},
         wchar::*,

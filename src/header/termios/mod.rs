@@ -112,7 +112,7 @@ pub unsafe extern "C" fn tcgetattr(fildes: c_int, termios_p: *mut termios) -> c_
     }
     #[cfg(not(stafeto))]
     {
-        unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TCGETS, termios_p.cast::<c_void>()) }
+        unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TCGETS, termios_p.cast::<c_void>()) }
     }
 }
 
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn tcsetattr(
         TCSANOW | TCSADRAIN | TCSAFLUSH => {
             // This is safe because ioctl shouldn't modify the value
             unsafe {
-                sys_ioctl::ioctl(
+                sys_ioctl::ioctl_ptr(
                     fildes,
                     sys_ioctl::TCSETS + optional_actions as c_ulong,
                     termios_p as *mut c_void,
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn tcsetattr(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tcgetsid(fildes: c_int) -> pid_t {
     let mut sid = 0;
-    if unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TIOCGSID, (&raw mut sid).cast::<c_void>()) } < 0
+    if unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TIOCGSID, (&raw mut sid).cast::<c_void>()) } < 0
     {
         return -1;
     }
@@ -296,7 +296,7 @@ pub unsafe extern "C" fn cfsetspeed(termios_p: *mut termios, speed: speed_t) -> 
 pub unsafe extern "C" fn tcflush(fildes: c_int, queue_selector: c_int) -> c_int {
     match queue_selector {
         TCIFLUSH | TCOFLUSH | TCIOFLUSH => unsafe {
-            sys_ioctl::ioctl(fildes, sys_ioctl::TCFLSH, queue_selector as *mut c_void)
+            sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TCFLSH, queue_selector as *mut c_void)
         },
         _ => {
             platform::ERRNO.set(errno::EINVAL);
@@ -314,7 +314,7 @@ pub unsafe extern "C" fn tcflush(fildes: c_int, queue_selector: c_int) -> c_int 
 /// indicate the error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tcdrain(fildes: c_int) -> c_int {
-    unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TCSBRK, core::ptr::dangling_mut()) }
+    unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TCSBRK, core::ptr::dangling_mut()) }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/tcsendbreak.html>.
@@ -330,7 +330,7 @@ pub unsafe extern "C" fn tcdrain(fildes: c_int) -> c_int {
 /// and assumed to be `0`. Matches behaviour of musl.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tcsendbreak(fildes: c_int, _duration: c_int) -> c_int {
-    unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TCSBRK, core::ptr::null_mut()) }
+    unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TCSBRK, core::ptr::null_mut()) }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/tcgetwinsize.html>.
@@ -342,7 +342,7 @@ pub unsafe extern "C" fn tcsendbreak(fildes: c_int, _duration: c_int) -> c_int {
 /// indicate the error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tcgetwinsize(fildes: c_int, winsize_p: *mut winsize) -> c_int {
-    unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TIOCGWINSZ, winsize_p.cast()) }
+    unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TIOCGWINSZ, winsize_p.cast()) }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/tcsetwinsize.html>.
@@ -359,7 +359,7 @@ pub unsafe extern "C" fn tcgetwinsize(fildes: c_int, winsize_p: *mut winsize) ->
 /// `tcsgetwinsize()` on `fildes`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tcsetwinsize(fildes: c_int, winsize_p: *const winsize) -> c_int {
-    unsafe { sys_ioctl::ioctl(fildes, sys_ioctl::TIOCSWINSZ, winsize_p.cast_mut().cast()) }
+    unsafe { sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TIOCSWINSZ, winsize_p.cast_mut().cast()) }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/tcflow.html>.
@@ -373,7 +373,7 @@ pub unsafe extern "C" fn tcsetwinsize(fildes: c_int, winsize_p: *const winsize) 
 pub unsafe extern "C" fn tcflow(fildes: c_int, action: c_int) -> c_int {
     match action {
         TCIOFF | TCION | TCOOFF | TCOON => unsafe {
-            sys_ioctl::ioctl(fildes, sys_ioctl::TCXONC, action as *mut _)
+            sys_ioctl::ioctl_ptr(fildes, sys_ioctl::TCXONC, action as *mut _)
         },
         _ => {
             platform::ERRNO.set(errno::EINVAL);
