@@ -299,6 +299,15 @@ impl BufRead for FILE {
 
 impl Write for FILE {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // A stream over a caller's buffer (fmemopen) ends with the buffer.
+        let room = self.memory_room(buf.len());
+        if room < buf.len() {
+            self.flags |= F_ERR;
+            if room == 0 {
+                return Err(io::Error::from_raw_os_error(crate::header::errno::ENOSPC));
+            }
+            return self.writer.write(&buf[..room]);
+        }
         match self.writer.write(buf) {
             Ok(n) => Ok(n),
             Err(err) => {
@@ -900,7 +909,11 @@ pub unsafe fn fseek_locked(stream: &mut FILE, mut off: off_t, whence: c_int) -> 
         return -1;
     }
 
+    let from = Sys::lseek(*stream.file, 0, SEEK_CUR).unwrap_or(0);
     if Sys::lseek(*stream.file, off, whence).or_minus_one_errno() < 0 {
+        return -1;
+    }
+    if !stream.memory_seek_ok(from) {
         return -1;
     }
 

@@ -153,3 +153,6 @@ panic = "abort"
 
 [patch.crates-io]
 redox_syscall = { git = "https://gitlab.redox-os.org/redox-os/kernel/" }
+# Our corrections of the regex engine. A path package is watched by cargo, so
+# a change of its sources rebuilds it (a vendored one is not).
+posix-regex = { path = "patched/posix-regex" }

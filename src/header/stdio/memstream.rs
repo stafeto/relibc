@@ -7,12 +7,17 @@
 
 use alloc::{boxed::Box, vec::Vec};
 
-use super::{FILE, SEEK_CUR, SEEK_END, SEEK_SET, constants::F_NOWR, helpers};
+use super::{
+    FILE, Pending, SEEK_CUR, SEEK_END, SEEK_SET,
+    constants::{F_APP, F_NOWR},
+    helpers,
+};
 use crate::{
     c_str::CStr,
     error::{Errno, ResultExtPtrMut},
     header::{
         errno::{EINVAL, ENOMEM},
+        fcntl::O_CLOEXEC,
         stdlib,
     },
     platform::{
@@ -46,7 +51,7 @@ pub(crate) enum MemKind {
 fn anonymous_file() -> Result<c_int, Errno> {
     let mut name = *b"/tmp/memstrXXXXXX\0";
     let name = name.as_mut_ptr().cast::<c_char>();
-    let fd = unsafe { stdlib::mkstemp(name) };
+    let fd = unsafe { stdlib::mkostemp(name, O_CLOEXEC) };
     if fd < 0 {
         return Err(Errno(platform::ERRNO.get()));
     }
@@ -112,6 +117,45 @@ fn wide_chars(bytes: &[u8]) -> Vec<wchar_t> {
 }
 
 impl FILE {
+    /// How many of `want` bytes the buffer of an `fmemopen` stream still has
+    /// room for at the place where a write lands (a stream of any other kind
+    /// has room for all). The bytes in the stream's own buffer count.
+    pub(crate) fn memory_room(&self, want: usize) -> usize {
+        let Some(MemKind::Fixed { size, .. }) = self.mem else {
+            return want;
+        };
+        let fd = *self.file;
+        let Ok(cur) = Sys::lseek(fd, 0, SEEK_CUR) else {
+            return want;
+        };
+        let at = if self.flags & F_APP != 0 {
+            let end = Sys::lseek(fd, 0, SEEK_END);
+            let _ = Sys::lseek(fd, cur, SEEK_SET);
+            end.unwrap_or(cur) as usize
+        } else {
+            cur as usize
+        } + self.writer.pending() as usize;
+        want.min(size.saturating_sub(at))
+    }
+
+    /// Checks the place a seek of a stream over a fixed buffer landed on:
+    /// past the buffer is `EINVAL`, and the stream goes back to `from`.
+    pub(crate) fn memory_seek_ok(&self, from: i64) -> bool {
+        let Some(MemKind::Fixed { size, .. }) = self.mem else {
+            return true;
+        };
+        let fd = *self.file;
+        match Sys::lseek(fd, 0, SEEK_CUR) {
+            Ok(to) if to as usize <= size => true,
+            Ok(_) => {
+                let _ = Sys::lseek(fd, from, SEEK_SET);
+                platform::ERRNO.set(EINVAL);
+                false
+            }
+            Err(_) => true,
+        }
+    }
+
     /// Brings the buffer of a memory stream up to the content of its file.
     /// The stream is locked and flushed. False when the buffer could not be
     /// made.
