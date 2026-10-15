@@ -109,6 +109,7 @@ pub enum Error {
     UnexpectedToken(u8),
     UnknownClass(Vec<u8>),
     UnknownCollation,
+    UnclosedGroup,
 }
 
 /// A regex builder struct
@@ -118,6 +119,8 @@ pub struct PosixRegexBuilder<'a> {
     group_id: usize,
     builder: TreeBuilder,
     extended: bool,
+    /// Set by the parse of a group when it ended at its closing parenthesis.
+    closed: bool,
 }
 impl<'a> PosixRegexBuilder<'a> {
     /// Create a new instance that is ready to parse the regex `input`
@@ -128,6 +131,7 @@ impl<'a> PosixRegexBuilder<'a> {
             group_id: 1,
             builder: TreeBuilder::default(),
             extended: false,
+            closed: false,
         }
     }
     /// Add a custom collation class, for use within square brackets (such as `[[:digit:]]`)
@@ -288,7 +292,7 @@ impl<'a> PosixRegexBuilder<'a> {
 
                         let mut push = true;
 
-                        if c == b'[' {
+                        if c == b'[' && matches!(self.input.first(), Some(b'.' | b'=' | b':')) {
                             // TODO: Handle collation characters properly,
                             // because currently idk what they are and only
                             // have the behavior of `grep` to go on.
@@ -363,14 +367,22 @@ impl<'a> PosixRegexBuilder<'a> {
                         let id = self.group_id;
                         self.group_id += 1;
                         let checkpoint = self.builder.checkpoint();
+                        self.closed = false;
                         self.parse()?;
+                        if !self.closed {
+                            return Err(Error::UnclosedGroup);
+                        }
+                        self.closed = false;
                         let range = self.parse_range()?;
                         self.builder
                             .start_internal_at(checkpoint, Token::Group(id), range);
                         self.builder.finish_internal();
                         continue;
                     }
-                    b')' if !self.extended => break,
+                    b')' if !self.extended => {
+                        self.closed = true;
+                        break;
+                    }
                     b'|' if !self.extended => {
                         self.builder.finish_internal();
                         self.builder
@@ -404,14 +416,22 @@ impl<'a> PosixRegexBuilder<'a> {
                     let id = self.group_id;
                     self.group_id += 1;
                     let checkpoint = self.builder.checkpoint();
+                    self.closed = false;
                     self.parse()?;
+                    if !self.closed {
+                        return Err(Error::UnclosedGroup);
+                    }
+                    self.closed = false;
                     let range = self.parse_range()?;
                     self.builder
                         .start_internal_at(checkpoint, Token::Group(id), range);
                     self.builder.finish_internal();
                     continue;
                 }
-                b')' if self.extended => break,
+                b')' if self.extended => {
+                    self.closed = true;
+                    break;
+                }
                 b'|' if self.extended => {
                     self.builder.finish_internal();
                     self.builder

@@ -83,6 +83,7 @@ pub unsafe extern "C" fn regcomp(out: *mut regex_t, pat: *const c_char, cflags: 
         Err(CompileError::UnclosedRepetition) => REG_EBRACE,
         Err(CompileError::LeadingRepetition) => REG_BADRPT,
         Err(CompileError::UnknownCollation) => REG_ECOLLATE,
+        Err(CompileError::UnclosedGroup) => REG_EPAREN,
         Err(CompileError::UnknownClass(_)) => REG_ECTYPE,
         Err(_) => REG_BADPAT,
     }
