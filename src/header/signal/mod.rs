@@ -8,7 +8,6 @@ use cbitset::BitSet;
 
 #[cfg(target_os = "linux")]
 use crate::platform::types::c_short;
-#[cfg(any(target_os = "redox", stafeto))]
 use crate::platform::types::pthread_attr_t;
 use crate::{
     error::{Errno, ResultExt},
@@ -139,22 +138,10 @@ pub struct sigevent {
     pub sigev_signo: c_int,
     /// Notification type.
     pub sigev_notify: c_int,
-    // Actually a union.  We only expose sigev_notify_thread_id because it's
-    // the most useful member
-    #[cfg(not(stafeto))]
-    pub sigev_notify_thread_id: c_int,
-    #[cfg(all(not(stafeto), target_pointer_width = "64"))]
-    __unused1: [c_int; 11],
-    #[cfg(all(not(stafeto), target_pointer_width = "32"))]
-    __unused1: [c_int; 12],
-    /// Stafeto has no thread identifiers to signal; the member that takes the
-    /// place of the union is the function of SIGEV_THREAD and its attributes,
-    /// with the glibc layout.
-    #[cfg(stafeto)]
+    // Actually a union.  The members exposed are those of SIGEV_THREAD, with
+    // the glibc layout; stafeto has no thread identifier to signal.
     pub sigev_notify_function: Option<extern "C" fn(sigval)>,
-    #[cfg(stafeto)]
     pub sigev_notify_attributes: *mut pthread_attr_t,
-    #[cfg(stafeto)]
     __unused1: [c_int; 8],
 }
 
