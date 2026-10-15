@@ -1,25 +1,32 @@
 use crate::{
+    header::bits_timespec::timespec,
+    platform::types::c_uint,
+};
+#[cfg(not(stafeto))]
+use crate::{
     header::{
-        bits_timespec::timespec,
         signal::{SIGALRM, SIGEV_SIGNAL, sigevent},
         time::itimerspec,
     },
     platform::{
         Pal, Sys,
-        types::{c_int, c_uint, timer_t},
+        types::{c_int, timer_t},
     },
     sync::Mutex,
 };
 
 /// Wrapper for timer_t that implements Send (the timer_t pointer is a process-
 /// wide mmap'd allocation that outlives any single thread).
+#[cfg(not(stafeto))]
 struct AlarmTimer(timer_t);
 // SAFETY: The timer_t pointer refers to an mmap'd RlctTimer that is
 // only accessed under the ALARM_TIMER mutex lock.
+#[cfg(not(stafeto))]
 unsafe impl Send for AlarmTimer {}
 
 /// Process-global singleton timer used by alarm(). Protected by a mutex to
 /// ensure only one alarm is active at a time (POSIX requirement).
+#[cfg(not(stafeto))]
 static ALARM_TIMER: Mutex<Option<AlarmTimer>> = Mutex::new(None);
 
 /// Internal helper that arms/disarms the process-global alarm timer.
@@ -30,6 +37,7 @@ static ALARM_TIMER: Mutex<Option<AlarmTimer>> = Mutex::new(None);
 /// TODO: This implementation does not survive `exec()`. POSIX requires that a
 /// pending alarm be preserved across exec (the timer continues counting down
 /// in the new process image as i understand).
+#[cfg(not(stafeto))]
 pub fn alarm_timespec(duration: timespec) -> c_uint {
     let mut guard = ALARM_TIMER.lock();
 
@@ -85,4 +93,30 @@ pub fn alarm_timespec(duration: timespec) -> c_uint {
     let _ = Sys::timer_settime(timer_id, 0, &spec, None);
 
     remaining
+}
+
+/// stafeto: the alarm lives in the process service, which keeps a pending
+/// alarm over `exec` as POSIX asks; it is the real-time interval timer of
+/// `setitimer`. Arms it `duration` from now (zero cancels it) and returns
+/// the seconds left of the alarm before, rounded up.
+#[cfg(stafeto)]
+#[expect(deprecated)]
+pub fn alarm_timespec(duration: timespec) -> c_uint {
+    use crate::{
+        header::{sys_select::timeval, sys_time::itimerval},
+        platform::{PalSignal, Sys},
+    };
+    let new = itimerval {
+        it_interval: timeval::default(),
+        it_value: timeval {
+            tv_sec: duration.tv_sec,
+            tv_usec: (duration.tv_nsec / 1000) as _,
+        },
+    };
+    let mut old = itimerval::default();
+    if Sys::setitimer(0, &new, Some(&mut old)).is_err() {
+        return 0;
+    }
+    let secs = old.it_value.tv_sec as c_uint;
+    if old.it_value.tv_usec > 0 { secs + 1 } else { secs }
 }

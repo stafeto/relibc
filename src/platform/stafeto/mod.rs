@@ -49,6 +49,22 @@ unsafe extern "C" {
     pub(crate) fn stafeto_exit(status: c_int) -> !;
     fn stafeto_clock_gettime(clock: clockid_t, out: *mut timespec) -> c_int;
     fn stafeto_clock_getres(clock: clockid_t, out: *mut timespec) -> c_int;
+    fn stafeto_timer_create(
+        clock: clockid_t,
+        notify: c_int,
+        signal: c_int,
+        value: u64,
+        out: *mut usize,
+    ) -> c_int;
+    fn stafeto_timer_delete(timer: usize) -> c_int;
+    fn stafeto_timer_getoverrun(timer: usize) -> c_int;
+    fn stafeto_timer_gettime(timer: usize, out: *mut itimerspec) -> c_int;
+    fn stafeto_timer_settime(
+        timer: usize,
+        flags: c_int,
+        new: *const itimerspec,
+        old: *mut itimerspec,
+    ) -> c_int;
     fn stafeto_mmap_anonymous(len: usize) -> *mut c_void;
     fn stafeto_munmap(addr: *mut c_void, len: usize) -> c_int;
     fn stafeto_getpid() -> pid_t;
@@ -1142,15 +1158,27 @@ impl Pal for Sys {
     }
 
     fn timer_create(clock_id: clockid_t, evp: &sigevent) -> Result<timer_t> {
-        Err(Errno(ENOSYS))
+        // The bytes of the event's value, as the caller stored them.
+        let value = unsafe { evp.sigev_value.sival_ptr } as usize as u64;
+        let mut timer = 0usize;
+        ret(unsafe {
+            stafeto_timer_create(clock_id, evp.sigev_notify, evp.sigev_signo, value, &mut timer)
+        } as isize)?;
+        Ok(timer as timer_t)
     }
 
     fn timer_delete(timerid: timer_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_timer_delete(timerid as usize) } as isize).map(|_| ())
+    }
+
+    fn timer_getoverrun(timerid: timer_t) -> Result<c_int> {
+        ret(unsafe { stafeto_timer_getoverrun(timerid as usize) } as isize).map(|n| n as c_int)
     }
 
     fn timer_gettime(timerid: timer_t) -> Result<itimerspec> {
-        Err(Errno(ENOSYS))
+        let mut out = itimerspec::default();
+        ret(unsafe { stafeto_timer_gettime(timerid as usize, &mut out) } as isize)?;
+        Ok(out)
     }
 
     fn timer_settime(
@@ -1159,7 +1187,12 @@ impl Pal for Sys {
         value: &itimerspec,
         ovalue: Option<Out<itimerspec>>,
     ) -> Result<()> {
-        Err(Errno(ENOSYS))
+        let mut old = itimerspec::default();
+        ret(unsafe { stafeto_timer_settime(timerid as usize, flags, value, &mut old) } as isize)?;
+        if let Some(mut out) = ovalue {
+            out.write(old);
+        }
+        Ok(())
     }
 
     fn umask(mask: mode_t) -> mode_t {

@@ -534,6 +534,12 @@ pub trait Pal {
     /// Platform implementation of [`timer_delete()`](crate::header::time::timer_delete) from [`time.h`](crate::header::time).
     fn timer_delete(timerid: timer_t) -> Result<()>;
 
+    /// Platform implementation of [`timer_getoverrun()`](crate::header::time::timer_getoverrun) from [`time.h`](crate::header::time).
+    fn timer_getoverrun(timerid: timer_t) -> Result<c_int> {
+        let _ = timerid;
+        Err(Errno(crate::header::errno::ENOSYS))
+    }
+
     /// Platform implementation of [`timer_gettime()`](crate::header::time::timer_gettime) from [`time.h`](crate::header::time).
     fn timer_gettime(timerid: timer_t) -> Result<itimerspec>;
 

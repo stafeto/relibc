@@ -234,6 +234,16 @@ pub unsafe extern "C" fn asctime_r(tm: *const tm, buf: *mut c_char) -> *mut c_ch
 pub extern "C" fn clock() -> clock_t {
     let mut ts = mem::MaybeUninit::<timespec>::uninit();
 
+    // stafeto: the kernel accounts no processor time, so the layer gives the
+    // time the process has run (an upper bound of it).
+    #[cfg(stafeto)]
+    unsafe {
+        unsafe extern "C" {
+            fn stafeto_clock_process(out: *mut timespec) -> c_int;
+        }
+        stafeto_clock_process(ts.as_mut_ptr());
+    }
+    #[cfg(not(stafeto))]
     if unsafe { clock_gettime(CLOCK_PROCESS_CPUTIME_ID, ts.as_mut_ptr()) } != 0 {
         return -1;
     }
@@ -616,9 +626,16 @@ pub unsafe extern "C" fn timer_create(
     evp: *mut sigevent,
     timerid: *mut timer_t,
 ) -> c_int {
-    let (Some(evp), Some(mut timerid)) = (unsafe { (evp.as_ref(), Out::nullable(timerid)) }) else {
+    let Some(mut timerid) = (unsafe { Out::nullable(timerid) }) else {
         return Err(Errno(EINVAL)).or_minus_one_errno();
     };
+    // A null event is SIGEV_SIGNAL with SIGALRM and the timer's own number
+    // as the value (the number is filled in by the platform).
+    let mut default = unsafe { mem::zeroed::<sigevent>() };
+    default.sigev_signo = crate::header::signal::SIGALRM as c_int;
+    // stafeto: bit 8 of the notification type says the value is the number.
+    default.sigev_notify = crate::header::signal::SIGEV_SIGNAL | 0x100;
+    let evp = unsafe { evp.as_ref() }.unwrap_or(&default);
     Sys::timer_create(clock_id, evp)
         .map(|timer| {
             timerid.write(timer);
@@ -634,10 +651,9 @@ pub unsafe extern "C" fn timer_delete(timerid: timer_t) -> c_int {
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/timer_getoverrun.html>.
-// #[unsafe(no_mangle)]
-#[expect(unused_variables, reason = "function not yet implemented")]
+#[unsafe(no_mangle)]
 pub extern "C" fn timer_getoverrun(timerid: timer_t) -> c_int {
-    unimplemented!();
+    Sys::timer_getoverrun(timerid).or_minus_one_errno()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/timer_gettime.html>.
