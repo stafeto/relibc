@@ -148,7 +148,14 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_THREADS
         | _SC_THREAD_ATTR_STACKADDR
         | _SC_THREAD_ATTR_STACKSIZE
-        | _SC_TIMEOUTS => 202405,
+        | _SC_TIMEOUTS
+        | _SC_TIMERS => 202405,
+        // The timers of the process service: 32 a process, and the count of
+        // overruns stops at the largest int. A signal has one place, so the
+        // queued signals a process may have pending are its 31 signals.
+        _SC_TIMER_MAX => 32,
+        _SC_DELAYTIMER_MAX => 2147483647,
+        _SC_SIGQUEUE_MAX => 31,
         _SC_JOB_CONTROL | _SC_SAVED_IDS | _SC_SHELL => 1,
         // A lowered process limit constrains allocation; infinity does not
         // enlarge the layer's physical descriptor table.
@@ -171,8 +178,7 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // the platform has no such service. The XSI option is not claimed;
         // the Shell and Utilities volume (_SC_2_VERSION) waits for the
         // utilities of 5n.
-        _SC_TIMERS
-        | _SC_ASYNCHRONOUS_IO
+        _SC_ASYNCHRONOUS_IO
         | _SC_MAPPED_FILES
         | _SC_MEMLOCK
         | _SC_MEMLOCK_RANGE
