@@ -8,7 +8,7 @@ use cbitset::BitSet;
 
 #[cfg(target_os = "linux")]
 use crate::platform::types::c_short;
-#[cfg(target_os = "redox")]
+#[cfg(any(target_os = "redox", stafeto))]
 use crate::platform::types::pthread_attr_t;
 use crate::{
     error::{Errno, ResultExt},
