@@ -20,7 +20,7 @@ use crate::{
     c_str::CStr,
     platform::types::{c_char, c_int},
 };
-use logger::{LOGGER, Priority};
+use logger::{ALL_LEVELS, FACILITY_BITS, LEVEL_BITS, LOGGER};
 
 /// Record the caller's PID in log messages.
 pub const LOG_PID: c_int = 0x01;
@@ -84,11 +84,10 @@ pub const extern "C" fn LOG_MASK(p: c_int) -> c_int {
 #[unsafe(no_mangle)]
 pub extern "C" fn setlogmask(mask: c_int) -> c_int {
     let mut params = LOGGER.lock();
-    let old = params.mask.bits();
-    if mask != 0
-        && let Some(mask) = params.mask.with_mask(mask)
-    {
-        params.mask = mask;
+    let old = params.mask;
+    // A mask of 0 only asks for the current one.
+    if mask != 0 {
+        params.mask = mask & ALL_LEVELS;
     }
     old
 }
@@ -102,12 +101,10 @@ pub unsafe extern "C" fn openlog(ident: *const c_char, opt: c_int, facility: c_i
     let mut params = LOGGER.lock();
     params.set_identity_cstr(ident);
     params.opt = conf;
-    params.mask = params.mask.with_facility(facility).unwrap_or(
-        params
-            .mask
-            .with_facility(Priority::User.bits())
-            .expect("`User` is a valid syslog facility"),
-    );
+    // A facility the argument does not name rightly keeps the default.
+    if facility & !FACILITY_BITS == 0 && facility != 0 {
+        params.facility = facility;
+    }
 
     // Ensure log is ready to write now instead of checking on the first message.
     if conf.contains(logger::Config::NoDelay)
@@ -123,12 +120,14 @@ pub unsafe extern "C" fn vsyslog(priority: c_int, message: *const c_char, ap: Va
     let Some(message) = (unsafe { CStr::from_nullable_ptr(message) }) else {
         return;
     };
-    let Some(priority) = Priority::from_bits(priority) else {
+    // The level is in the low bits, the facility, if any, above them; bits
+    // beyond those make the priority invalid.
+    if priority & !(FACILITY_BITS | LEVEL_BITS) != 0 {
         return;
-    };
+    }
 
     let mut logger = LOGGER.lock();
-    if logger.mask.should_log(priority) {
+    if logger.mask & (1 << (priority & LEVEL_BITS)) != 0 {
         logger.write_log(priority, message, ap);
     }
 }

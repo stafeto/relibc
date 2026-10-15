@@ -174,6 +174,7 @@ pub const ECHOPRT: usize = 0o002_000;
 ///
 /// Erase the whole line visually when KILL comes.
 pub const ECHOKE: usize = 0o004_000;
+pub const FLUSHO: usize = 0o010_000;
 /// Enable extended input character processing.
 pub const IEXTEN: usize = 0o100_000;
 /* } c_lflag */

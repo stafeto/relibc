@@ -21,12 +21,15 @@ use bitflags::bitflags;
 use chrono::{DateTime, Utc};
 
 use super::{
-    LOG_ALERT, LOG_AUTH, LOG_AUTHPRIV, LOG_CONS, LOG_CRIT, LOG_CRON, LOG_DAEMON, LOG_DEBUG,
-    LOG_EMERG, LOG_ERR, LOG_FTP, LOG_INFO, LOG_KERN, LOG_LOCAL0, LOG_LOCAL1, LOG_LOCAL2,
-    LOG_LOCAL3, LOG_LOCAL4, LOG_LOCAL5, LOG_LOCAL6, LOG_LOCAL7, LOG_LPR, LOG_MAIL, LOG_MASK,
-    LOG_NDELAY, LOG_NEWS, LOG_NOTICE, LOG_NOWAIT, LOG_ODELAY, LOG_PERROR, LOG_PID, LOG_SYSLOG,
-    LOG_UPTO, LOG_USER, LOG_UUCP, LOG_WARNING, sys::LogFile,
+    LOG_CONS, LOG_NDELAY, LOG_NOWAIT, LOG_ODELAY, LOG_PERROR, LOG_PID, LOG_USER, sys::LogFile,
 };
+
+/// The bits of a priority argument that name the facility.
+pub(super) const FACILITY_BITS: c_int = 0x3f8;
+/// The bits that name the level.
+pub(super) const LEVEL_BITS: c_int = 0x07;
+/// The mask of all eight levels.
+pub(super) const ALL_LEVELS: c_int = 0xff;
 
 pub(super) static LOGGER: Mutex<LogParams<LogFile>> = Mutex::new(LogParams::new(None));
 
@@ -35,7 +38,10 @@ pub(super) struct LogParams<L: LogSink> {
     /// but the program name is a common default.
     ident: String,
     pub opt: Config,
-    pub mask: Priority,
+    /// The levels that are logged, bit n for level n (setlogmask).
+    pub mask: c_int,
+    /// The facility of messages whose priority names none (openlog).
+    pub facility: c_int,
     writer: Option<L>,
 }
 
@@ -44,12 +50,13 @@ impl<L: LogSink> LogParams<L> {
         LogParams {
             ident: String::new(),
             opt: Config::DelayOpen,
-            mask: Priority::from_bits_truncate(Priority::User.bits() | Priority::UpToDebug.bits()),
+            mask: ALL_LEVELS,
+            facility: LOG_USER,
             writer,
         }
     }
 
-    pub fn write_log(&mut self, priority: Priority, message: CStr<'_>, ap: VaList) {
+    pub fn write_log(&mut self, priority: c_int, message: CStr<'_>, ap: VaList) {
         if message.is_empty() {
             return;
         }
@@ -59,22 +66,35 @@ impl<L: LogSink> LogParams<L> {
 
         let epoch = unsafe { time(null_mut()) };
         let currtime: DateTime<Utc> = DateTime::from_timestamp(epoch, 0).unwrap_or_default();
-        let currtime_s = currtime.format("%b %e %T %Y");
         let pid = self.opt.contains(Config::Pid).then(|| getpid());
 
         // journald from systemd rewrites log messages from syslog into its own style. We'll
         // still use the same style as other libc even though it's implementation specific.
-        let mut buffer = if let Some(pid) = pid {
-            format!(
-                "<{}>{} {}{}: ",
-                priority.bits(),
-                currtime_s,
-                self.ident,
-                pid
-            )
+        // A text file of messages has the traditional lines, "Oct 15 19:44:01 ident[pid]: text".
+        #[cfg(stafeto)]
+        let mut buffer = {
+            let _ = priority;
+            let date = currtime.format("%b %e %T");
+            match pid {
+                Some(pid) => format!("{date} {}[{pid}]: ", self.ident.trim_end_matches('\0')),
+                None => format!("{date} {}: ", self.ident.trim_end_matches('\0')),
+            }
             .into_bytes()
-        } else {
-            format!("<{}>{} {}: ", priority.bits(), currtime_s, self.ident).into_bytes()
+        };
+        #[cfg(not(stafeto))]
+        let mut buffer = {
+            let currtime_s = currtime.format("%b %e %T %Y");
+            let priority = if priority & FACILITY_BITS != 0 {
+                priority
+            } else {
+                priority | self.facility
+            };
+            if let Some(pid) = pid {
+                format!("<{}>{} {}{}: ", priority, currtime_s, self.ident, pid)
+            } else {
+                format!("<{}>{} {}: ", priority, currtime_s, self.ident)
+            }
+            .into_bytes()
         };
         let prefix = buffer.len();
 
@@ -84,20 +104,23 @@ impl<L: LogSink> LogParams<L> {
         unsafe { printf(&mut buffer, message, ap) };
         buffer.extend(b"\n\0");
 
+        // A datagram to a log daemon ends with a NUL; a line of a text file
+        // does not. Each message is written out at once.
+        let wire: &[u8] = if cfg!(stafeto) {
+            &buffer[..buffer.len() - 1]
+        } else {
+            &buffer
+        };
+        let put = |w: &mut L| {
+            let sink = w.writer();
+            sink.write_all(wire).and_then(|()| sink.flush())
+        };
         if self.maybe_open_logger().is_ok()
-            && self
-                .writer
-                .as_mut()
-                .map(|w| w.writer().write_all(&buffer).is_err())
-                .unwrap_or(true)
+            && self.writer.as_mut().map(|w| put(w).is_err()).unwrap_or(true)
         {
             // Try reopening the log file once and retrying as musl does.
             if !(self.open_logger().is_ok()
-                && self
-                    .writer
-                    .as_mut()
-                    .and_then(|w| w.writer().write_all(&buffer).ok())
-                    .is_some())
+                && self.writer.as_mut().and_then(|w| put(w).ok()).is_some())
                 && self.opt.contains(Config::Console)
             {
                 // TODO: Log error to /dev/console & Redox equivalent
@@ -193,78 +216,5 @@ bitflags! {
         const NoDelay = LOG_NDELAY;
         const NoWait = LOG_NOWAIT;
         const PError = LOG_PERROR;
-    }
-}
-
-bitflags! {
-    /// Packed Facility-Priority bit field.
-    #[derive(Clone, Copy)]
-    pub struct Priority: c_int {
-        const Emerg = LOG_EMERG;
-        const Alert = LOG_ALERT;
-        const Crit = LOG_CRIT;
-        const Err = LOG_ERR;
-        const Warn = LOG_WARNING;
-        const Notice = LOG_NOTICE;
-        const Info = LOG_INFO;
-        const Debug = LOG_DEBUG;
-
-        const UpToEmerg = LOG_UPTO(LOG_EMERG);
-        const UpToAlert = LOG_UPTO(LOG_ALERT);
-        const UpToCrit = LOG_UPTO(LOG_CRIT);
-        const UpToErr = LOG_UPTO(LOG_ERR);
-        const UpToWarn = LOG_UPTO(LOG_WARNING);
-        const UpToNotice = LOG_UPTO(LOG_NOTICE);
-        const UpToInfo = LOG_UPTO(LOG_INFO);
-        const UpToDebug = LOG_UPTO(LOG_DEBUG);
-
-        const Kern = LOG_KERN;
-        const User = LOG_USER;
-        const Mail = LOG_MAIL;
-        const Daemon = LOG_DAEMON;
-        const Auth = LOG_AUTH;
-        const Syslog = LOG_SYSLOG;
-        const Printer = LOG_LPR;
-        const News = LOG_NEWS;
-        const UUCP = LOG_UUCP;
-        const CRON = LOG_CRON;
-        const AuthPriv = LOG_AUTHPRIV;
-        const FTP = LOG_FTP;
-        const Local0 = LOG_LOCAL0;
-        const Local1 = LOG_LOCAL1;
-        const Local2 = LOG_LOCAL2;
-        const Local3 = LOG_LOCAL3;
-        const Local4 = LOG_LOCAL4;
-        const Local5 = LOG_LOCAL5;
-        const Local6 = LOG_LOCAL6;
-        const Local7 = LOG_LOCAL7;
-
-        // Internal constants for extracting facility or priority from a packed bitfield.
-        const FacilityMask = 0x3ff;
-        const PriorityMask = !Self::FacilityMask.bits();
-    }
-}
-
-impl Priority {
-    /// Keep facility but replace severity mask.
-    pub fn with_mask(self, mask: c_int) -> Option<Self> {
-        // Fail on invalid bits and drop invalid facility bits.
-        let mask = Self::from_bits(mask)? & Self::FacilityMask;
-        let facility = self & Self::PriorityMask;
-        Some(mask | facility)
-    }
-
-    /// Keep mask but replace facility.
-    pub fn with_facility(self, facility: c_int) -> Option<Self> {
-        // Fail on invalid bits and drop invalid priority bits.
-        let facility = Self::from_bits(facility)? & Self::PriorityMask;
-        let mask = self & Self::FacilityMask;
-        Some(mask | facility)
-    }
-
-    /// Returns if a message of `priority` should be retained by this mask.
-    pub fn should_log(self, priority: Self) -> bool {
-        (self & Self::FacilityMask)
-            .contains(Priority::from_bits_truncate(LOG_MASK(priority.bits())))
     }
 }

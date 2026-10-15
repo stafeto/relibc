@@ -32,6 +32,8 @@ after_includes = """
     (x)->tv_usec op (y)->tv_usec \
     : \
     (x)->tv_sec op (y)->tv_sec)
+
+int settimeofday(const struct timeval *tv, const void *tz);
 """
 style = "Tag"
 no_includes = true

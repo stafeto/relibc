@@ -224,6 +224,9 @@ pub unsafe extern "C" fn confstr(name: c_int, buf: *mut c_char, len: size_t) -> 
     // terminator. This is different from other C functions hence the + 1.
     match name {
         _CS_PATH => {
+            #[cfg(stafeto)]
+            let posix2_path = c"/bin:/usr/bin";
+            #[cfg(not(stafeto))]
             let posix2_path = c"/usr/bin";
             unsafe { snprintf(buf, len, c"%s".as_ptr(), posix2_path.as_ptr()) + 1 }
                 .try_into()
@@ -395,6 +398,13 @@ pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *mut c_char) -
         let mut error = errno::ENOENT;
 
         let path_env = unsafe { getenv(c"PATH".as_ptr()) };
+        // An environment with no PATH searches the path confstr(_CS_PATH)
+        // gives, where the standard utilities are.
+        let path_env = if path_env.is_null() && cfg!(stafeto) {
+            c"/bin:/usr/bin".as_ptr().cast_mut()
+        } else {
+            path_env
+        };
         if !path_env.is_null() {
             let path_env = unsafe { CStr::from_ptr(path_env) };
             for program_buf in PathSearchIter::new(file.to_bytes(), &path_env) {
@@ -677,11 +687,82 @@ pub unsafe extern "C" fn getlogin() -> *mut c_char {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getlogin.html>.
 #[unsafe(no_mangle)]
 pub extern "C" fn getlogin_r(name: *mut c_char, namesize: size_t) -> c_int {
-    // Nobody is logged in: the system keeps no record of logins, and the
-    // name of the user of a terminal is not known. The error number is the
-    // return value.
-    let _ = (name, namesize);
-    errno::ENXIO
+    // The name of the user logged in at the terminal of the process: the
+    // record of the accounting file (utmpx) for the terminal's line, and
+    // where the file has none, the owner of the real user ID of a process
+    // that has a terminal. A process with no terminal has no login (ENXIO).
+    #[repr(C)]
+    struct Utmpx {
+        user: [c_char; 32],
+        id: [c_char; 4],
+        line: [c_char; 32],
+        pid: pid_t,
+        kind: c_short,
+        time: [i64; 2],
+    }
+    const USER_PROCESS: c_short = 7;
+    unsafe extern "C" {
+        fn setutxent();
+        fn endutxent();
+        fn getutxline(line: *const Utmpx) -> *mut Utmpx;
+    }
+
+    let mut tty = [0 as c_char; 64];
+    if !(0..3).any(|fd| ttyname_r(fd, tty.as_mut_ptr(), tty.len()) == 0) {
+        return errno::ENXIO;
+    }
+    // SAFETY: ttyname_r ended the name with a NUL.
+    let path = unsafe { CStr::from_ptr(tty.as_ptr()) }.to_bytes();
+    let line = path.strip_prefix(b"/dev/").unwrap_or(path);
+    let mut key: Utmpx = unsafe { mem::zeroed() };
+    key.kind = USER_PROCESS;
+    for (to, from) in key.line.iter_mut().zip(line) {
+        *to = *from as c_char;
+    }
+    let mut found: Option<([c_char; 33], usize)> = None;
+    // SAFETY: the accounting functions are libc's own; the entry they return
+    // is read before the next call.
+    unsafe {
+        setutxent();
+        let entry = getutxline(&key);
+        if !entry.is_null() {
+            let user = &(*entry).user;
+            let len = user.iter().position(|c| *c == 0).unwrap_or(user.len());
+            let mut copy = [0 as c_char; 33];
+            copy[..len].copy_from_slice(&user[..len]);
+            found = Some((copy, len));
+        }
+        endutxent();
+    }
+    let (user, len) = match found {
+        Some(found) => found,
+        None => {
+            let pw = crate::header::pwd::getpwuid(getuid());
+            if pw.is_null() {
+                return errno::ENXIO;
+            }
+            // SAFETY: getpwuid gives a record with a NUL-terminated name.
+            let bytes = unsafe { CStr::from_ptr((*pw).pw_name) }.to_bytes();
+            if bytes.len() > 32 {
+                return errno::ERANGE;
+            }
+            let mut copy = [0 as c_char; 33];
+            for (to, from) in copy.iter_mut().zip(bytes) {
+                *to = *from as c_char;
+            }
+            (copy, bytes.len())
+        }
+    };
+    if len == 0 {
+        return errno::ENXIO;
+    }
+    if namesize < len + 1 {
+        return errno::ERANGE;
+    }
+    // SAFETY: the caller's buffer holds `namesize` characters.
+    unsafe { ptr::copy_nonoverlapping(user.as_ptr(), name, len) };
+    unsafe { *name.add(len) = 0 };
+    0
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/7908799/xsh/getpagesize.html>.

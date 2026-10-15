@@ -23,18 +23,29 @@ pub struct LogFile(BufWriter<File>);
 impl LogSink for LogFile {
     type Sink = BufWriter<File>;
 
-    // No log daemon runs on stafeto: the messages go to the standard error, as
-    // they do on a system whose log is the console.
+    // No log daemon runs on stafeto: the journal is a file the messages are
+    // appended to, /var/log/messages. Where the file cannot be opened the
+    // messages go to the standard error, as on a system whose log is the
+    // terminal.
     #[cfg(stafeto)]
     fn open() -> Result<Self>
     where
         Self: Sized,
     {
-        let fd = crate::header::unistd::dup(2);
-        if fd < 0 {
-            return Err(Errno(ERRNO.get()));
-        }
-        Ok(Self(BufWriter::new(File::new(fd))))
+        use crate::header::fcntl::{O_APPEND, O_CLOEXEC, O_WRONLY};
+        // The refusals on the way to the file that opens are no error.
+        let saved = ERRNO.get();
+        let file = File::create(c"/var/log/messages".into(), O_WRONLY | O_APPEND | O_CLOEXEC, 0o644)
+            .or_else(|_| {
+                let fd = crate::header::unistd::dup(2);
+                if fd < 0 {
+                    Err(Errno(ERRNO.get()))
+                } else {
+                    Ok(File::new(fd))
+                }
+            })?;
+        ERRNO.set(saved);
+        Ok(Self(BufWriter::new(file)))
     }
 
     #[cfg(not(stafeto))]

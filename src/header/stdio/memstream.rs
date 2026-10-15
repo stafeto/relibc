@@ -249,7 +249,7 @@ fn open_dynamic(kind: MemKind, wide: bool) -> *mut FILE {
         }
         Ok(stream)
     })();
-    result.map(Box::into_raw).or_errno_null_mut()
+    result.map(Box::into_raw).map(super::track).or_errno_null_mut()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/open_memstream.html>.
@@ -345,5 +345,5 @@ pub unsafe extern "C" fn fmemopen(
         });
         Ok(stream)
     })();
-    result.map(Box::into_raw).or_errno_null_mut()
+    result.map(Box::into_raw).map(super::track).or_errno_null_mut()
 }

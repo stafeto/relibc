@@ -118,6 +118,12 @@ pub unsafe extern "C" fn posix_spawnp(
     };
     let envp = unsafe { NulTerminated::new(envp) };
     let path_env = unsafe { getenv(c"PATH".as_ptr()) };
+    // An environment with no PATH searches the path confstr(_CS_PATH) gives.
+    let path_env = if path_env.is_null() && cfg!(stafeto) {
+        c"/bin:/usr/bin".as_ptr().cast_mut()
+    } else {
+        path_env
+    };
     let path_env = (!path_env.is_null()).then(|| unsafe { CStr::from_ptr(path_env) });
 
     match unsafe {

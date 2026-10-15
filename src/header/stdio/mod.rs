@@ -9,6 +9,7 @@ use alloc::{
 };
 use core::{
     cmp,
+    sync::atomic::Ordering,
     ffi::VaList as va_list,
     fmt::{self, Write as WriteFmt},
     mem,
@@ -526,6 +527,7 @@ pub unsafe extern "C" fn fclose(stream: *mut FILE) -> c_int {
 
     if stream.flags & constants::F_PERM == 0 {
         // Not one of stdin, stdout or stderr
+        untrack(stream);
         let mut stream = unsafe { Box::from_raw(stream) };
         // Reference files aren't closed on drop, so pretend to be a reference
         stream.file.reference = true;
@@ -543,6 +545,7 @@ pub unsafe extern "C" fn fclose(stream: *mut FILE) -> c_int {
 pub unsafe extern "C" fn fdopen(fildes: c_int, mode: *const c_char) -> *mut FILE {
     helpers::_fdopen(fildes, unsafe { CStr::from_ptr(mode) })
         .map(Box::into_raw)
+        .map(track)
         .or_errno_null_mut()
 }
 
@@ -572,13 +575,18 @@ pub unsafe extern "C" fn ferror(stream: *mut FILE) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fflush(stream: *mut FILE) -> c_int {
     if stream.is_null() {
-        //TODO: flush all files!
-
-        if unsafe { fflush(stdout) } != 0 {
-            return EOF;
+        // All the streams that are open: the standard ones and those fopen,
+        // fdopen, popen and the memory streams made.
+        let mut failed = unsafe { fflush(stdout) } != 0;
+        failed |= unsafe { fflush(stderr) } != 0;
+        let mut at = 0;
+        while let Some(open) = open_stream(at) {
+            let mut stream = unsafe { (*open).lock() };
+            failed |= stream.flush().is_err() || !stream.sync_memory();
+            drop(stream);
+            at += 1;
         }
-
-        if unsafe { fflush(stderr) } != 0 {
+        if failed {
             return EOF;
         }
     } else {
@@ -740,6 +748,7 @@ pub unsafe extern "C" fn fopen(filename: *const c_char, mode: *const c_char) -> 
 
     helpers::_fdopen(fd, unsafe { CStr::from_ptr(mode) })
         .map(Box::into_raw)
+        .map(track)
         .inspect_err(|_| {
             // TODO: guard type
             if let Ok(()) = Sys::close(fd) {}; // TODO handle error
@@ -1223,7 +1232,7 @@ pub unsafe extern "C" fn popen(command: *const c_char, mode: *const c_char) -> *
         helpers::_fdopen(fd, fd_mode)
             .map(|mut f| {
                 f.pid = Some(child_pid);
-                Box::into_raw(f)
+                track(Box::into_raw(f))
             })
             .or_errno_null_mut()
     } else {
@@ -1794,4 +1803,52 @@ pub unsafe fn flush_io_streams() {
     };
     flush(unsafe { stdout });
     flush(unsafe { stderr });
+    // Exit flushes every open stream (XSH exit): the process has one thread
+    // left and nobody holds a lock. The streams that fopen and the others
+    // made put their flush here when the first of them was made, so that a
+    // program that opens none carries no code for them.
+    let hook = FLUSH_OPEN.load(Ordering::Acquire);
+    if !hook.is_null() {
+        let hook: fn() = unsafe { mem::transmute(hook) };
+        hook();
+    }
+}
+
+/// The function that flushes the streams of `OPEN_STREAMS`, set by `track`.
+static FLUSH_OPEN: core::sync::atomic::AtomicPtr<()> =
+    core::sync::atomic::AtomicPtr::new(ptr::null_mut());
+
+/// Flushes the streams of the list.
+fn flush_open_streams() {
+    let mut at = 0;
+    while let Some(open) = open_stream(at) {
+        let stream = unsafe { &mut *open };
+        let _ = stream.flush();
+        let _ = stream.sync_memory();
+        at += 1;
+    }
+}
+
+/// The streams `fopen`, `fdopen`, `popen` and the memory streams made and
+/// `fclose` has not closed, which exit and `fflush(NULL)` flush.
+static OPEN_STREAMS: crate::sync::Mutex<Vec<usize>> = crate::sync::Mutex::new(Vec::new());
+
+/// Enters a new stream in the list of the open ones.
+pub(crate) fn track(stream: *mut FILE) -> *mut FILE {
+    OPEN_STREAMS.lock().push(stream as usize);
+    FLUSH_OPEN.store(flush_open_streams as fn() as *mut (), Ordering::Release);
+    stream
+}
+
+/// Takes a stream out of the list as it closes.
+fn untrack(stream: *mut FILE) {
+    let mut open = OPEN_STREAMS.lock();
+    if let Some(at) = open.iter().position(|&s| s == stream as usize) {
+        open.swap_remove(at);
+    }
+}
+
+/// The open stream at `at` of the list, if there is one.
+fn open_stream(at: usize) -> Option<*mut FILE> {
+    OPEN_STREAMS.lock().get(at).map(|&s| s as *mut FILE)
 }
