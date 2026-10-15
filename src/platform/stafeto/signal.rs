@@ -42,6 +42,7 @@ unsafe extern "C" {
     ) -> c_int;
     fn stafeto_raise(sig: c_int) -> c_int;
     fn stafeto_kill(pid: pid_t, sig: c_int) -> c_int;
+    fn stafeto_sigqueue(pid: pid_t, sig: c_int, value: u64) -> c_int;
     fn stafeto_killpg(pgrp: pid_t, sig: c_int) -> c_int;
     fn stafeto_thread_kill(id: c_int, sig: c_int) -> c_int;
 }
@@ -69,7 +70,9 @@ impl PalSignal for Sys {
         ret(unsafe { stafeto_kill(pid, sig) }).map(|_| ())
     }
     fn sigqueue(pid: pid_t, sig: c_int, val: sigval) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The bytes of the union, as the sender stored them.
+        let bytes = unsafe { val.sival_ptr } as usize as u64;
+        ret(unsafe { stafeto_sigqueue(pid, sig, bytes) }).map(|_| ())
     }
 
     fn killpg(pgrp: pid_t, sig: c_int) -> Result<()> {
