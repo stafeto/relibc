@@ -1,69 +1,38 @@
-/*	$OpenBSD: s_cexpl.c,v 1.2 2011/07/20 19:28:33 martynas Exp $	*/
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 Sergey Subbotin <ssubbotin@gmail.com> */
 
-/*
- * Copyright (c) 2008 Stephen L. Moshier <steve@moshier.net>
- *
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+#include "stafeto_cplx.h"
 
-/*							cexpl()
- *
- *	Complex exponential function
- *
- *
- *
- * SYNOPSIS:
- *
- * long double complex cexpl();
- * long double complex z, w;
- *
- * w = cexpl( z );
- *
- *
- *
- * DESCRIPTION:
- *
- * Returns the exponential of the complex argument z
- * into the complex result w.
- *
- * If
- *     z = x + iy,
- *     r = exp(x),
- *
- * then
- *
- *     w = r cos y + i r sin y.
- *
- *
- * ACCURACY:
- *
- *                      Relative error:
- * arithmetic   domain     # trials      peak         rms
- *    DEC       -10,+10      8700       3.7e-17     1.1e-17
- *    IEEE      -10,+10     30000       3.0e-16     8.7e-17
- *
- */
-
-#include <openlibm_complex.h>
-#include <openlibm_math.h>
-
+/* C11 G.6.3.1: cexp. */
 long double complex
 cexpl(long double complex z)
 {
-	long double complex w;
-	long double r;
+	long double x = creall(z), y = cimagl(z), c, s, ax;
 
-	r = expl(creall(z));
-	w = r * cosl(cimagl(z)) + (r * sinl(cimagl(z))) * I;
-	return (w);
+	if (y == 0)
+		return CMPLXL(expl(x), y);
+	if (isnan(y) || isinf(y)) {
+		if (isinf(x)) {
+			if (x < 0)
+				return CMPLXL(0.0L, copysignl(0.0L, y));
+			return CMPLXL(x, y - y);
+		}
+		return CMPLXL(y - y, y - y);
+	}
+	if (isnan(x))
+		return CMPLXL(x, x);
+	c = cosl(y);
+	s = sinl(y);
+	if (isinf(x)) {
+		if (x < 0)
+			return CMPLXL(copysignl(0.0L, c), copysignl(0.0L, s));
+		return CMPLXL(copysignl(x, c), copysignl(x, s));
+	}
+	if (x == 0)
+		return CMPLXL(c, s);
+	if (x < 11000.0L) {
+		ax = expl(x);
+		return CMPLXL(ax * c, ax * s);
+	}
+	return CMPLXL(cplx_half_exp(x, 2 * c), cplx_half_exp(x, 2 * s));
 }

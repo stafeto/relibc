@@ -1,73 +1,40 @@
-/*	$OpenBSD: s_clogl.c,v 1.2 2011/07/20 19:28:33 martynas Exp $	*/
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 Sergey Subbotin <ssubbotin@gmail.com> */
 
-/*
- * Copyright (c) 2008 Stephen L. Moshier <steve@moshier.net>
- *
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+#include "stafeto_cplx.h"
 
-/*							clogl.c
- *
- *	Complex natural logarithm
- *
- *
- *
- * SYNOPSIS:
- *
- * long double complex clogl();
- * long double complex z, w;
- *
- * w = clogl( z );
- *
- *
- *
- * DESCRIPTION:
- *
- * Returns complex logarithm to the base e (2.718...) of
- * the complex argument x.
- *
- * If z = x + iy, r = sqrt( x**2 + y**2 ),
- * then
- *       w = log(r) + i arctan(y/x).
- *
- * The arctangent ranges from -PI to +PI.
- *
- *
- * ACCURACY:
- *
- *                      Relative error:
- * arithmetic   domain     # trials      peak         rms
- *    DEC       -10,+10      7000       8.5e-17     1.9e-17
- *    IEEE      -10,+10     30000       5.0e-15     1.1e-16
- *
- * Larger relative error can be observed for z near 1 +i0.
- * In IEEE arithmetic the peak absolute error is 5.2e-16, rms
- * absolute error 1.0e-16.
- */
-
-#include <openlibm_complex.h>
-#include <openlibm_math.h>
-
+/* C11 G.6.3.2: clog. */
 long double complex
 clogl(long double complex z)
 {
-	long double complex w;
-	long double p, rr;
+	long double x = creall(z), y = cimagl(z), ax, ay, t, re;
 
-	/*rr = sqrt(z->r * z->r  +  z->i * z->i);*/
-	p = cabsl(z);
-	p = logl(p);
-	rr = atan2l(cimagl(z), creall(z));
-	w = p + rr * I;
-	return (w);
+	if (isinf(x) || isinf(y)) {
+		if (isinf(y) && isinf(x)) {
+			if (x < 0)
+				return CMPLXL(INFINITY, copysignl(LD_3PI_4, y));
+			return CMPLXL(INFINITY, copysignl(LD_PI_4, y));
+		}
+		if (isinf(y))
+			return CMPLXL(INFINITY, isnan(x) ? x : copysignl(LD_PI_2, y));
+		if (isnan(y))
+			return CMPLXL(INFINITY, y);
+		return CMPLXL(INFINITY, x < 0 ? copysignl(LD_PI, y) : copysignl(0.0L, y));
+	}
+	if (isnan(x) || isnan(y))
+		return CMPLXL(x + y, x + y);
+	ax = fabsl(x);
+	ay = fabsl(y);
+	if (ax < ay) {
+		t = ax;
+		ax = ay;
+		ay = t;
+	}
+	if (ax == 0)
+		re = -INFINITY;
+	else {
+		t = ay / ax;
+		re = logl(ax) + log1pl(t * t) / 2;
+	}
+	return CMPLXL(re, atan2l(y, x));
 }

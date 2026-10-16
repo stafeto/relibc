@@ -1,60 +1,37 @@
-/*	$OpenBSD: s_ctanhl.c,v 1.2 2011/07/20 19:28:33 martynas Exp $	*/
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 Sergey Subbotin <ssubbotin@gmail.com> */
 
-/*
- * Copyright (c) 2008 Stephen L. Moshier <steve@moshier.net>
- *
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+#include "stafeto_cplx.h"
 
-/*							ctanhl
- *
- *	Complex hyperbolic tangent
- *
- *
- *
- * SYNOPSIS:
- *
- * long double complex ctanhl();
- * long double complex z, w;
- *
- * w = ctanhl (z);
- *
- *
- *
- * DESCRIPTION:
- *
- * tanh z = (sinh 2x  +  i sin 2y) / (cosh 2x + cos 2y) .
- *
- * ACCURACY:
- *
- *                      Relative error:
- * arithmetic   domain     # trials      peak         rms
- *    IEEE      -10,+10     30000       1.7e-14     2.4e-16
- *
- */
-
-#include <openlibm_complex.h>
-#include <openlibm_math.h>
-
+/* C11 G.6.2.6: ctanh. */
 long double complex
 ctanhl(long double complex z)
 {
-	long double complex w;
-	long double x, y, d;
+	long double x = creall(z), y = cimagl(z), t, beta, sh, ch, d, e;
 
-	x = creall(z);
-	y = cimagl(z);
-	d = coshl(2.0L * x) + cosl(2.0L * y);
-	w = sinhl(2.0L * x) / d + (sinl(2.0L * y) / d) * I;
-	return (w);
+	if (isnan(x)) {
+		if (y == 0)
+			return CMPLXL(x, y);
+		return CMPLXL(x, x);
+	}
+	if (isinf(x)) {
+		if (isinf(y) || isnan(y))
+			return CMPLXL(copysignl(1.0L, x), 0.0L);
+		return CMPLXL(copysignl(1.0L, x), copysignl(0.0L, sinl(2 * y)));
+	}
+	if (x == 0 && (isnan(y) || isinf(y)))
+		return CMPLXL(x, y - y);
+	if (isinf(y) || isnan(y))
+		return CMPLXL(y - y, y - y);
+	if (fabsl(x) >= 50.0L) {
+		/* tanh x is 1 within 2^-140; the imaginary part is 4 sin y cos y e^-2|x|. */
+		e = expl(-2 * fabsl(x));
+		return CMPLXL(copysignl(1.0L, x), 4 * sinl(y) * cosl(y) * e);
+	}
+	t = tanl(y);
+	sh = sinhl(x);
+	ch = coshl(x);
+	beta = 1 + t * t;
+	d = 1 + beta * sh * sh;
+	return CMPLXL(beta * ch * sh / d, t / d);
 }

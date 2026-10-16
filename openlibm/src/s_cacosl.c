@@ -1,63 +1,38 @@
-/*	$OpenBSD: s_cacosl.c,v 1.3 2011/07/20 21:02:51 martynas Exp $	*/
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 Sergey Subbotin <ssubbotin@gmail.com> */
 
-/*
- * Copyright (c) 2008 Stephen L. Moshier <steve@moshier.net>
- *
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+#include "stafeto_cplx.h"
 
-/*							cacosl()
- *
- *	Complex circular arc cosine
- *
- *
- *
- * SYNOPSIS:
- *
- * long double complex cacosl();
- * long double complex z, w;
- *
- * w = cacosl( z );
- *
- *
- *
- * DESCRIPTION:
- *
- *
- * w = arccos z  =  PI/2 - arcsin z.
- *
- *
- *
- *
- * ACCURACY:
- *
- *                      Relative error:
- * arithmetic   domain     # trials      peak         rms
- *    DEC       -10,+10      5200      1.6e-15      2.8e-16
- *    IEEE      -10,+10     30000      1.8e-14      2.2e-15
- */
-
-#include <openlibm_complex.h>
-#include <openlibm_math.h>
-
-static const long double PIO2L = 1.570796326794896619231321691639751442098585L;
-
+/* C11 G.6.1.1: cacos. Finite arguments follow Kahan:
+ * cacos(z) = 2 atan2(Re sqrt(1-z), Re sqrt(1+z))
+ *          + i asinh(Im(conj(sqrt(1+z)) sqrt(1-z))). */
 long double complex
 cacosl(long double complex z)
 {
-	long double complex w;
+	long double x = creall(z), y = cimagl(z);
+	long double complex a, b;
 
-	w = casinl(z);
-	w = (PIO2L - creall(w)) - cimagl(w) * I;
-	return (w);
+	if (isnan(x)) {
+		if (isinf(y))
+			return CMPLXL(x, -y);
+		return CMPLXL(x, x);
+	}
+	if (isnan(y)) {
+		if (isinf(x))
+			return CMPLXL(y, INFINITY);
+		if (x == 0)
+			return CMPLXL(LD_PI_2, y);
+		return CMPLXL(y, y);
+	}
+	if (isinf(x)) {
+		if (isinf(y))
+			return CMPLXL(x < 0 ? LD_3PI_4 : LD_PI_4, -y);
+		return CMPLXL(x < 0 ? LD_PI : 0.0L, -copysignl(INFINITY, y));
+	}
+	if (isinf(y))
+		return CMPLXL(LD_PI_2, -y);
+	a = csqrtl(CMPLXL(1 - x, -y));
+	b = csqrtl(CMPLXL(1 + x, y));
+	return CMPLXL(2 * atan2l(creall(a), creall(b)),
+	    asinhl(creall(b) * cimagl(a) - cimagl(b) * creall(a)));
 }

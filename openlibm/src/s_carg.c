@@ -36,5 +36,5 @@ OLM_DLLEXPORT double
 carg(double complex z)
 {
 
-	return (atan2(cimag(z), creal(z)));
+	return ((double)atan2l((long double)cimag(z), (long double)creal(z)));
 }

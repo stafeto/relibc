@@ -1,59 +1,35 @@
-/*	$OpenBSD: s_ccoshl.c,v 1.2 2011/07/20 19:28:33 martynas Exp $	*/
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 Sergey Subbotin <ssubbotin@gmail.com> */
 
-/*
- * Copyright (c) 2008 Stephen L. Moshier <steve@moshier.net>
- *
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+#include "stafeto_cplx.h"
 
-/*							ccoshl
- *
- *	Complex hyperbolic cosine
- *
- *
- *
- * SYNOPSIS:
- *
- * long double complex ccoshl();
- * long double complex z, w;
- *
- * w = ccoshl (z);
- *
- *
- *
- * DESCRIPTION:
- *
- * ccosh(z) = cosh x  cos y + i sinh x sin y .
- *
- * ACCURACY:
- *
- *                      Relative error:
- * arithmetic   domain     # trials      peak         rms
- *    IEEE      -10,+10     30000       2.9e-16     8.1e-17
- *
- */
-
-#include <openlibm_complex.h>
-#include <openlibm_math.h>
-
+/* C11 G.6.2.4: ccosh. */
 long double complex
 ccoshl(long double complex z)
 {
-	long double complex w;
-	long double x, y;
+	long double x = creall(z), y = cimagl(z), c, s, ax;
 
-	x = creall(z);
-	y = cimagl(z);
-	w = coshl(x) * cosl(y) + (sinhl(x) * sinl(y)) * I;
-	return (w);
+	if (isnan(x)) {
+		if (y == 0)
+			return CMPLXL(x, y);
+		return CMPLXL(x, x);
+	}
+	if (isinf(x)) {
+		if (y == 0)
+			return CMPLXL(INFINITY, copysignl(0.0L, y) * copysignl(1.0L, x));
+		if (isinf(y) || isnan(y))
+			return CMPLXL(INFINITY, y - y);
+		return CMPLXL(copysignl(INFINITY, cosl(y)), copysignl(INFINITY, sinl(y) * copysignl(1.0L, x)));
+	}
+	if (isinf(y) || isnan(y)) {
+		if (x == 0)
+			return CMPLXL(y - y, x * 0.0L);
+		return CMPLXL(y - y, y - y);
+	}
+	c = cosl(y);
+	s = sinl(y);
+	ax = fabsl(x);
+	if (ax < 50.0L)
+		return CMPLXL(coshl(x) * c, sinhl(x) * s);
+	return CMPLXL(cplx_half_exp(ax, c), cplx_half_exp(ax, copysignl(1.0L, x) * s));
 }

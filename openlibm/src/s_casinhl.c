@@ -1,56 +1,45 @@
-/*	$OpenBSD: s_casinhl.c,v 1.1 2011/07/08 19:25:31 martynas Exp $	*/
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 Sergey Subbotin <ssubbotin@gmail.com> */
 
-/*
- * Copyright (c) 2008 Stephen L. Moshier <steve@moshier.net>
- *
- * Permission to use, copy, modify, and distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
- * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
- * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
- * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
+#include "stafeto_cplx.h"
 
-/*							casinhl
- *
- *	Complex inverse hyperbolic sine
- *
- *
- *
- * SYNOPSIS:
- *
- * long double complex casinhf();
- * long double complex z, w;
- *
- * w = casinhl (z);
- *
- *
- *
- * DESCRIPTION:
- *
- * casinh z = -i casin iz .
- *
- * ACCURACY:
- *
- *                      Relative error:
- * arithmetic   domain     # trials      peak         rms
- *    IEEE      -10,+10     30000       1.8e-14     2.6e-15
- *
- */
-
-#include <openlibm_complex.h>
-#include <openlibm_math.h>
-
+/* C11 G.6.2.2: casinh. Finite arguments follow Kahan:
+ * casin(u + iv) = atan2(u, Re(sqrt(1-z) sqrt(1+z)))
+ *               + i asinh(Im(conj(sqrt(1-z)) sqrt(1+z))),
+ * and casinh(z) = -i casin(iz). */
 long double complex
 casinhl(long double complex z)
 {
-	long double complex w;
+	long double x = creall(z), y = cimagl(z), u, v;
+	long double complex a, b, p, q;
 
-	w = -1.0L * I * casinl(z * I);
-	return (w);
+	if (isinf(x)) {
+		if (isinf(y))
+			return CMPLXL(x, copysignl(LD_PI_4, y));
+		if (isnan(y))
+			return CMPLXL(x, y);
+		return CMPLXL(x, copysignl(0.0L, y));
+	}
+	if (isnan(x)) {
+		if (y == 0)
+			return CMPLXL(x, y);
+		if (isinf(y))
+			return CMPLXL(INFINITY, x);
+		return CMPLXL(x, x);
+	}
+	if (isinf(y))
+		return CMPLXL(copysignl(INFINITY, x), copysignl(LD_PI_2, y));
+	if (isnan(y))
+		return CMPLXL(y, y);
+	/* iz = u + iv */
+	u = -y;
+	v = x;
+	a = csqrtl(CMPLXL(1 - u, -v));
+	b = csqrtl(CMPLXL(1 + u, v));
+	p = CMPLXL(creall(a) * creall(b) - cimagl(a) * cimagl(b),
+	    creall(a) * cimagl(b) + cimagl(a) * creall(b));
+	q = CMPLXL(creall(a) * creall(b) + cimagl(a) * cimagl(b),
+	    creall(a) * cimagl(b) - cimagl(a) * creall(b));
+	/* casin(iz) = atan2(u, Re p) + i asinh(Im q); times -i. */
+	return CMPLXL(asinhl(cimagl(q)), -atan2l(u, creall(p)));
 }
