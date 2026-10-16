@@ -43,7 +43,7 @@ pub struct posix_spawnattr_t {
     pub param: sched_param,
     pub flags: c_short,
     pub pgroup: c_int,
-    policy: c_int,
+    pub(crate) policy: c_int,
     pub sigdefault: sigset_t,
     pub sigmask: sigset_t,
 }

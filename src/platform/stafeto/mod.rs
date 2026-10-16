@@ -335,6 +335,8 @@ struct SpawnAttributes {
     pgroup: c_int,
     mask: u64,
     default: u64,
+    policy: c_int,
+    priority: c_int,
 }
 
 /// A file action of posix_spawn as the layer takes it: OPEN (1) of `path`
@@ -1539,6 +1541,8 @@ unsafe fn spawn_search(
             pgroup: attr.pgroup,
             mask: attr.sigmask,
             default: attr.sigdefault,
+            policy: attr.policy,
+            priority: attr.param.sched_priority,
         });
         let attributes = attributes
             .as_ref()

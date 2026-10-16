@@ -982,11 +982,10 @@ pub extern "C" fn nice(incr: c_int) -> c_int {
     let current_nice = 20 - prio;
     let new_nice = current_nice.saturating_add(incr).clamp(-20, 19);
 
-    if Sys::setpriority(sys_resource::PRIO_PROCESS, 0, new_nice)
-        .map(|()| 0)
-        .or_minus_one_errno()
-        < 0
-    {
+    if let Err(Errno(code)) = Sys::setpriority(sys_resource::PRIO_PROCESS, 0, new_nice) {
+        // XSH nice: EPERM for a step the caller lacks the privilege for
+        // (setpriority says EACCES).
+        platform::ERRNO.set(if code == errno::EACCES { errno::EPERM } else { code });
         return -1;
     }
 
