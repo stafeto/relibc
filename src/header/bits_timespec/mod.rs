@@ -40,7 +40,7 @@ impl timespec {
             let roundup_sec = -delta_nsec / NANOSECONDS + 1;
             timespec {
                 tv_sec: delta_sec - time_t::from(roundup_sec),
-                tv_nsec: roundup_sec * NANOSECONDS - delta_nsec,
+                tv_nsec: roundup_sec * NANOSECONDS + delta_nsec,
             }
         } else {
             timespec {
