@@ -13,7 +13,7 @@ impl GlobalFile {
         let file = File::new(file);
         // The standard error is not buffered (POSIX XSH 2.5, stderr).
         let writer = if file_number == 2 {
-            super::FileInnerWriter::Unbuffered(File::new(file_number))
+            super::FileInnerWriter::Unbuffered(unsafe { file.get_ref() })
         } else {
             super::FileInnerWriter::Line(LineWriter::new_const(unsafe { file.get_ref() }))
         };
