@@ -9,8 +9,14 @@ pub struct GlobalFile(UnsafeCell<FILE>);
 
 impl GlobalFile {
     const fn new(file: c_int, flags: c_int) -> Self {
+        let file_number = file;
         let file = File::new(file);
-        let writer = LineWriter::new_const(unsafe { file.get_ref() });
+        // The standard error is not buffered (POSIX XSH 2.5, stderr).
+        let writer = if file_number == 2 {
+            super::FileInnerWriter::Unbuffered(File::new(file_number))
+        } else {
+            super::FileInnerWriter::Line(LineWriter::new_const(unsafe { file.get_ref() }))
+        };
         let mutex_attr = pthread::RlctMutexAttr {
             ty: pthread::PTHREAD_MUTEX_RECURSIVE,
             ..pthread::RlctMutexAttr::default_const()
@@ -26,7 +32,7 @@ impl GlobalFile {
             read_pos: 0,
             read_size: 0,
             unget: Vec::new(),
-            writer: super::FileInnerWriter::Line(writer),
+            writer,
 
             pid: None,
 
