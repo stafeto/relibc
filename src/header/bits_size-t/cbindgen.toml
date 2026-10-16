@@ -4,7 +4,7 @@
 #
 # POSIX headers that require size_t:
 # - aio.h
-# - devctl.h (TODO not present in relibc)
+# - devctl.h
 # - dirent.h
 # - glob.h
 # - grp.h

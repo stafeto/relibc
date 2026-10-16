@@ -324,8 +324,7 @@ pub(super) fn sysconf_impl(name: c_int) -> c_long {
         _SC_XOPEN_XPG2 => -1,
         _SC_XOPEN_XPG3 => -1,
         _SC_XOPEN_XPG4 => -1,
-        // TODO: ?
-        _SC_NZERO => -1,
+        _SC_NZERO => 20,
         _SC_XBS5_ILP32_OFF32 => -1,
         _SC_XBS5_ILP32_OFFBIG => {
             if size_of::<c_long>() == 4 {

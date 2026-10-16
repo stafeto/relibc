@@ -392,6 +392,9 @@ pub unsafe fn exit_current_thread(retval: Retval) -> ! {
 
     unsafe { header::tls::run_all_destructors() };
 
+    // Robust mutexes the thread still holds say EOWNERDEAD to the next owner.
+    crate::sync::pthread_mutex::release_held_robust();
+
     let this = current_thread().expect("failed to obtain current thread when exiting");
     let mut stack_base = this.stack_base;
     let mut stack_size = this.stack_size;

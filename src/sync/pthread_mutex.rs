@@ -1,5 +1,6 @@
 use core::{
     cell::Cell,
+    ptr,
     sync::atomic::{AtomicU8, AtomicU32 as AtomicUint, Ordering},
 };
 
@@ -17,8 +18,10 @@ pub struct RlctMutex {
 
     ty: Ty,
     /// PTHREAD_PRIO_NONE, PTHREAD_PRIO_INHERIT or PTHREAD_PRIO_PROTECT in
-    /// the low bits; `ROBUST` for a robust mutex.
-    protocol: u8,
+    /// the low bits; `ROBUST` for a robust mutex, and for one, `OWNER_DEAD`
+    /// from the end of its owner until pthread_mutex_consistent, and
+    /// `NOT_RECOVERABLE` once an owner unlocked it without that call.
+    protocol: AtomicU8,
     /// The priority ceiling of PTHREAD_PRIO_PROTECT, 1 to 32. The ceiling
     /// is read when a thread starts to lock and written by
     /// pthread_mutex_setprioceiling while it holds the mutex.
@@ -29,6 +32,34 @@ pub struct RlctMutex {
 }
 
 const ROBUST: u8 = 0x80;
+const NOT_RECOVERABLE: u8 = 0x40;
+const OWNER_DEAD: u8 = 0x20;
+const PROTOCOL_MASK: u8 = 0x0f;
+
+/// The robust mutexes this thread holds, which its end marks as having an
+/// owner that died (stafeto: threads end inside the process, so a process
+/// that ends with robust mutexes held leaves them to the process that shares
+/// them, if any, locked).
+const HELD_MAX: usize = 64;
+#[thread_local]
+static HELD: [Cell<*const RlctMutex>; HELD_MAX] = [const { Cell::new(ptr::null()) }; HELD_MAX];
+#[thread_local]
+static HELD_COUNT: Cell<usize> = Cell::new(0);
+
+/// The end of the calling thread: each robust mutex it holds is unlocked
+/// and says EOWNERDEAD to the next thread that locks it.
+pub fn release_held_robust() {
+    for index in 0..HELD_COUNT.get() {
+        let mutex = HELD[index].replace(ptr::null());
+        if !mutex.is_null() {
+            let mutex = unsafe { &*mutex };
+            mutex.protocol.fetch_or(OWNER_DEAD, Ordering::Relaxed);
+            mutex.recursive_count.store(0, Ordering::Relaxed);
+            mutex.release_word();
+        }
+    }
+    HELD_COUNT.set(0);
+}
 
 const STATE_UNLOCKED: u32 = 0;
 const WAITING_BIT: u32 = 1 << 31;
@@ -65,13 +96,15 @@ impl RlctMutex {
         }
 
         Ok(Self {
-            protocol: protocol as u8
-                | match robust {
-                    PTHREAD_MUTEX_STALLED => 0,
-                    PTHREAD_MUTEX_ROBUST => ROBUST,
+            protocol: AtomicU8::new(
+                protocol as u8
+                    | match robust {
+                        PTHREAD_MUTEX_STALLED => 0,
+                        PTHREAD_MUTEX_ROBUST => ROBUST,
 
-                    _ => return Err(Errno(EINVAL)),
-                },
+                        _ => return Err(Errno(EINVAL)),
+                    },
+            ),
             prioceiling: AtomicU8::new(prioceiling as u8),
             entered: AtomicU8::new(0),
             inner: AtomicUint::new(STATE_UNLOCKED),
@@ -87,10 +120,63 @@ impl RlctMutex {
         })
     }
     fn protocol(&self) -> i32 {
-        i32::from(self.protocol & !ROBUST)
+        i32::from(self.protocol.load(Ordering::Relaxed) & PROTOCOL_MASK)
     }
     fn robust(&self) -> bool {
-        self.protocol & ROBUST != 0
+        self.protocol.load(Ordering::Relaxed) & ROBUST != 0
+    }
+    /// A robust mutex just locked: it joins the mutexes the thread holds.
+    /// EOWNERDEAD tells the new owner that the previous one ended holding
+    /// it, ENOTRECOVERABLE (the mutex unlocked again) that nobody repaired it.
+    fn acquired(&self) -> Result<(), Errno> {
+        if !self.robust() {
+            return Ok(());
+        }
+        let state = self.protocol.load(Ordering::Relaxed);
+        if state & NOT_RECOVERABLE != 0 {
+            self.release_word();
+            return Err(Errno(ENOTRECOVERABLE));
+        }
+        let count = HELD_COUNT.get();
+        if count == HELD_MAX {
+            self.release_word();
+            return Err(Errno(EAGAIN));
+        }
+        HELD[count].set(self);
+        HELD_COUNT.set(count + 1);
+        if state & OWNER_DEAD != 0 {
+            return Err(Errno(EOWNERDEAD));
+        }
+        Ok(())
+    }
+    /// The mutex leaves the mutexes the thread holds.
+    fn forget(&self) {
+        let count = HELD_COUNT.get();
+        for index in (0..count).rev() {
+            if ptr::eq(HELD[index].get(), self) {
+                let last = HELD[count - 1].replace(ptr::null());
+                if index != count - 1 {
+                    HELD[index].set(last);
+                }
+                HELD_COUNT.set(count - 1);
+                return;
+            }
+        }
+    }
+    /// The locking word becomes free and one waiter wakes.
+    fn release_word(&self) {
+        // One waiter at a time: it takes the lock with WAITING_BIT, so the
+        // next unlock wakes the next one. With PTHREAD_PRIO_INHERIT all
+        // wake: those that lose the race wait for the new owner and lend it
+        // their level, and this thread's level, raised for them, is worked
+        // out again.
+        if self.inner.swap(STATE_UNLOCKED, Ordering::Release) & WAITING_BIT != 0 {
+            if self.protocol() == PTHREAD_PRIO_INHERIT {
+                unsafe { crate::platform::sys::futex_wake_pi(self.inner.as_ptr(), u32::MAX) };
+            } else {
+                crate::sync::futex_wake(&self.inner, 1);
+            }
+        }
     }
     /// pthread_mutex_getprioceiling: the ceiling of the mutex.
     pub fn prioceiling(&self) -> Result<c_int, Errno> {
@@ -112,8 +198,12 @@ impl RlctMutex {
         self.unlock()?;
         Ok(c_int::from(old))
     }
+    /// pthread_mutex_consistent: the state the mutex protects is repaired.
     pub fn make_consistent(&self) -> Result<(), Errno> {
-        todo_skip!(0, "pthread robust mutexes: not implemented");
+        if !self.robust() || self.protocol.load(Ordering::Relaxed) & OWNER_DEAD == 0 {
+            return Err(Errno(EINVAL));
+        }
+        self.protocol.fetch_and(!OWNER_DEAD, Ordering::Relaxed);
         Ok(())
     }
     /// Locks, waiting until `deadline` on CLOCK_REALTIME if one is given.
@@ -141,7 +231,7 @@ impl RlctMutex {
                     if self.ty == Ty::Recursive {
                         self.increment_recursive_count()?;
                     }
-                    return Ok(());
+                    return self.acquired();
                 }
                 // CAS failed, but the mutex was recursive and we already own the lock.
                 Err(thread) if thread & INDEX_MASK == this_thread && self.ty == Ty::Recursive => {
@@ -251,7 +341,7 @@ impl RlctMutex {
         let entered = self.protect_enter()?;
         let locked = self.lock_inner(None);
         match locked {
-            Ok(()) => self.locked(entered),
+            Ok(()) | Err(Errno(EOWNERDEAD)) => self.locked(entered),
             Err(_) => self.protect_leave(entered),
         }
         locked
@@ -261,7 +351,7 @@ impl RlctMutex {
         let entered = self.protect_enter()?;
         let locked = self.lock_inner(Some(deadline));
         match locked {
-            Ok(()) => self.locked(entered),
+            Ok(()) | Err(Errno(EOWNERDEAD)) => self.locked(entered),
             Err(_) => self.protect_leave(entered),
         }
         locked
@@ -288,7 +378,7 @@ impl RlctMutex {
         let entered = self.protect_enter()?;
         let locked = self.try_lock_inner();
         match locked {
-            Ok(()) => self.locked(entered),
+            Ok(()) | Err(Errno(EOWNERDEAD)) => self.locked(entered),
             Err(_) => self.protect_leave(entered),
         }
         locked
@@ -312,11 +402,11 @@ impl RlctMutex {
 
             self.increment_recursive_count()?;
 
-            return Ok(());
+            return if result.is_ok() { self.acquired() } else { Ok(()) };
         }
 
         match result {
-            Ok(_) => Ok(()),
+            Ok(_) => self.acquired(),
             Err(_) => Err(Errno(EBUSY)),
         }
     }
@@ -347,18 +437,14 @@ impl RlctMutex {
             0
         };
 
-        // One waiter at a time: it takes the lock with WAITING_BIT, so the
-        // next unlock wakes the next one. With PTHREAD_PRIO_INHERIT all
-        // wake: those that lose the race wait for the new owner and lend it
-        // their level, and this thread's level, raised for them, is worked
-        // out again.
-        if self.inner.swap(STATE_UNLOCKED, Ordering::Release) & WAITING_BIT != 0 {
-            if self.protocol() == PTHREAD_PRIO_INHERIT {
-                unsafe { crate::platform::sys::futex_wake_pi(self.inner.as_ptr(), u32::MAX) };
-            } else {
-                crate::sync::futex_wake(&self.inner, 1);
+        if self.robust() {
+            self.forget();
+            if self.protocol.load(Ordering::Relaxed) & OWNER_DEAD != 0 {
+                // Unlocked before pthread_mutex_consistent: nobody can use it.
+                self.protocol.fetch_or(NOT_RECOVERABLE, Ordering::Relaxed);
             }
         }
+        self.release_word();
         self.protect_leave(entered);
 
         Ok(())

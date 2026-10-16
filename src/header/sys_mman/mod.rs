@@ -43,6 +43,10 @@ pub const MS_ASYNC: c_int = 0x0001;
 pub const MS_INVALIDATE: c_int = 0x0002;
 pub const MS_SYNC: c_int = 0x0004;
 
+pub const POSIX_TYPED_MEM_ALLOCATE: c_int = 0x01;
+pub const POSIX_TYPED_MEM_ALLOCATE_CONTIG: c_int = 0x02;
+pub const POSIX_TYPED_MEM_MAP_ALLOCATABLE: c_int = 0x04;
+
 pub const MCL_CURRENT: c_int = 1;
 pub const MCL_FUTURE: c_int = 2;
 
@@ -213,4 +217,59 @@ pub unsafe extern "C" fn shm_open(name: *const c_char, oflag: c_int, mode: mode_
 pub unsafe extern "C" fn shm_unlink(name: *const c_char) -> c_int {
     let path = unsafe { shm_path(name) };
     unsafe { unistd::unlink(path.as_ptr()) }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sys_mman.h.html>.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct posix_typed_mem_info {
+    pub posix_tmi_length: size_t,
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_typed_mem_open.html>.
+///
+/// The system has no typed memory pool, so no name opens one.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn posix_typed_mem_open(
+    name: *const c_char,
+    oflag: c_int,
+    tflag: c_int,
+) -> c_int {
+    let pools = POSIX_TYPED_MEM_ALLOCATE | POSIX_TYPED_MEM_ALLOCATE_CONTIG | POSIX_TYPED_MEM_MAP_ALLOCATABLE;
+    if name.is_null() || tflag & !pools != 0 || oflag & !(fcntl::O_ACCMODE | fcntl::O_CLOEXEC) != 0 {
+        ERRNO.set(errno::EINVAL);
+    } else {
+        ERRNO.set(errno::ENOENT);
+    }
+    -1
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_typed_mem_get_info.html>.
+///
+/// No descriptor refers to a typed memory object: ENODEV for an open one.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn posix_typed_mem_get_info(
+    fildes: c_int,
+    info: *mut posix_typed_mem_info,
+) -> c_int {
+    let _ = info;
+    match Sys::fcntl(fildes, fcntl::F_GETFD, 0) {
+        Ok(_) => errno::ENODEV,
+        Err(Errno(code)) => code,
+    }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_mem_offset.html>.
+///
+/// No mapping of the process belongs to a typed memory object: EACCES.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn posix_mem_offset(
+    addr: *const c_void,
+    len: size_t,
+    off: *mut off_t,
+    contig_len: *mut size_t,
+    fildes: *mut c_int,
+) -> c_int {
+    let _ = (addr, off, contig_len, fildes);
+    if len == 0 { errno::EINVAL } else { errno::EACCES }
 }

@@ -85,7 +85,7 @@ pub mod cpio;
 pub mod crypt;
 pub mod ctype;
 // TODO: curses.h (deprecated)
-// TODO: devctl.h
+pub mod devctl;
 pub mod dirent;
 #[path = "dl-tls/mod.rs"]
 pub mod dl_tls;
