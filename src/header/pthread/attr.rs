@@ -26,9 +26,8 @@ impl Default for RlctAttr {
             // Default according to POSIX.
             inheritsched: c_uchar::try_from(PTHREAD_INHERIT_SCHED)
                 .expect("constant value within bounds"),
-            // TODO: Linux
-            // Redox uses a round-robin scheduler
-            schedpolicy: c_uchar::try_from(SCHED_RR).expect("constant value within bounds"),
+            // SCHED_OTHER, the policy of a thread that asks for none.
+            schedpolicy: c_uchar::try_from(SCHED_OTHER).expect("constant value within bounds"),
             // TODO: Linux uses this one.
             scope: c_uchar::try_from(PTHREAD_SCOPE_SYSTEM).expect("constant value within bounds"),
             guardsize: Sys::getpagesize(),
@@ -345,7 +344,7 @@ pub unsafe extern "C" fn pthread_attr_setinheritsched(
             }
             0
         }
-        _ => crate::header::errno::ENOTSUP,
+        _ => crate::header::errno::EINVAL,
     }
 }
 
@@ -366,8 +365,14 @@ pub unsafe extern "C" fn pthread_attr_setschedparam(
     attr: *mut pthread_attr_t,
     param: *const sched_param,
 ) -> c_int {
+    // The priorities of SCHED_FIFO and SCHED_RR run from 1 to 32, those of
+    // SCHED_OTHER are 0: nothing else is a priority.
+    let priority = unsafe { param.read() };
+    if !(0..=32).contains(&priority.sched_priority) {
+        return crate::header::errno::EINVAL;
+    }
     unsafe {
-        (*attr.cast::<RlctAttr>()).param = param.read();
+        (*attr.cast::<RlctAttr>()).param = priority;
     }
     0
 }
@@ -397,7 +402,7 @@ pub unsafe extern "C" fn pthread_attr_setschedpolicy(
             }
             0
         }
-        _ => crate::header::errno::ENOTSUP,
+        _ => crate::header::errno::EINVAL,
     }
 }
 
@@ -416,7 +421,7 @@ pub unsafe extern "C" fn pthread_attr_setscope(
     contentionscope: c_int,
 ) -> c_int {
     match contentionscope {
-        PTHREAD_SCOPE_SYSTEM | PTHREAD_SCOPE_PROCESS => {
+        PTHREAD_SCOPE_SYSTEM => {
             // infallible, value of constants fit into `c_uchar`
             if let Ok(ctnscope) = contentionscope.try_into() {
                 // SAFTEY: guaranteed to fit
@@ -426,7 +431,9 @@ pub unsafe extern "C" fn pthread_attr_setscope(
             }
             0
         }
-        _ => crate::header::errno::ENOTSUP,
+        // Threads are 1:1 with the kernel's: no process contention scope.
+        PTHREAD_SCOPE_PROCESS => crate::header::errno::ENOTSUP,
+        _ => crate::header::errno::EINVAL,
     }
 }
 

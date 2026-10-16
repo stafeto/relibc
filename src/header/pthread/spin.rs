@@ -9,6 +9,8 @@ use crate::{
 const UNLOCKED: c_int = 0;
 /// The spin lock is in a locked state.
 const LOCKED: c_int = 1;
+/// The spin lock is locked and a thread waits for it by address.
+const WAITED: c_int = 2;
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_spin_destroy.html>.
 ///
@@ -77,6 +79,11 @@ pub unsafe extern "C" fn pthread_spin_init(
 pub unsafe extern "C" fn pthread_spin_lock(lock: *mut pthread_spinlock_t) -> c_int {
     let spinlock = unsafe { &*lock.cast::<RlctSpinlock>() };
 
+    // stafeto runs on one processor: the holder cannot make progress while
+    // this thread spins, and under SCHED_FIFO a holder of a lower priority
+    // never would. A few turns for a holder that is about to let go, then
+    // the thread waits by address and the unlock wakes it.
+    let mut turns = 0u32;
     loop {
         match spinlock.inner.compare_exchange_weak(
             UNLOCKED,
@@ -85,7 +92,18 @@ pub unsafe extern "C" fn pthread_spin_lock(lock: *mut pthread_spinlock_t) -> c_i
             Ordering::Relaxed,
         ) {
             Ok(_) => break,
-            Err(_) => core::hint::spin_loop(),
+            Err(_) if turns < 4 => {
+                turns += 1;
+                core::hint::spin_loop();
+            }
+            Err(_) => {
+                // Waiting: state 2. The thread that finds the lock free
+                // takes it in that state, so that its unlock wakes the next.
+                if spinlock.inner.swap(WAITED, Ordering::Acquire) == UNLOCKED {
+                    break;
+                }
+                crate::sync::futex_wait(&spinlock.inner, WAITED, None);
+            }
         }
     }
 
@@ -131,7 +149,9 @@ pub unsafe extern "C" fn pthread_spin_trylock(lock: *mut pthread_spinlock_t) -> 
 pub unsafe extern "C" fn pthread_spin_unlock(lock: *mut pthread_spinlock_t) -> c_int {
     let spinlock = unsafe { &*lock.cast::<RlctSpinlock>() };
 
-    spinlock.inner.store(UNLOCKED, Ordering::Release);
+    if spinlock.inner.swap(UNLOCKED, Ordering::Release) == WAITED {
+        crate::sync::futex_wake(&spinlock.inner, 1);
+    }
 
     0
 }

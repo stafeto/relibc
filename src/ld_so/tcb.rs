@@ -47,13 +47,13 @@ pub type OsSpecific = ();
 #[cfg(stafeto)]
 #[derive(Debug, Default)]
 #[repr(C, align(16))]
-pub struct OsSpecific(pub UnsafeCell<[u64; 24]>);
+pub struct OsSpecific(pub UnsafeCell<[u64; 30]>);
 
-// The layer finds the block at a fixed place: 32 bytes into the TCB, 192
+// The layer finds the block at a fixed place: 32 bytes into the TCB, 240
 // bytes long. The stafeto platform checks the layer's view at start.
 #[cfg(stafeto)]
 const _: () = {
-    assert!(mem::size_of::<OsSpecific>() == 192);
+    assert!(mem::size_of::<OsSpecific>() == 240);
     assert!(mem::align_of::<OsSpecific>() == 16);
     assert!(mem::offset_of!(GenericTcb<OsSpecific>, os_specific) == 32);
 };

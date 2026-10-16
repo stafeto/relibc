@@ -166,6 +166,10 @@ pub unsafe extern "C" fn pthread_mutexattr_setprioceiling(
     attr: *mut pthread_mutexattr_t,
     prioceiling: c_int,
 ) -> c_int {
+    // The priorities of SCHED_FIFO and SCHED_RR: 1 to 32.
+    if !(1..=32).contains(&prioceiling) {
+        return crate::header::errno::EINVAL;
+    }
     unsafe { &mut *attr.cast::<RlctMutexAttr>() }.prioceiling = prioceiling;
     0
 }
@@ -176,6 +180,12 @@ pub unsafe extern "C" fn pthread_mutexattr_setprotocol(
     attr: *mut pthread_mutexattr_t,
     protocol: c_int,
 ) -> c_int {
+    if !matches!(
+        protocol,
+        PTHREAD_PRIO_NONE | PTHREAD_PRIO_INHERIT | PTHREAD_PRIO_PROTECT
+    ) {
+        return crate::header::errno::EINVAL;
+    }
     unsafe { &mut *attr.cast::<RlctMutexAttr>() }.protocol = protocol;
     0
 }
@@ -186,6 +196,9 @@ pub unsafe extern "C" fn pthread_mutexattr_setpshared(
     attr: *mut pthread_mutexattr_t,
     pshared: c_int,
 ) -> c_int {
+    if !matches!(pshared, PTHREAD_PROCESS_PRIVATE | PTHREAD_PROCESS_SHARED) {
+        return crate::header::errno::EINVAL;
+    }
     unsafe { &mut *attr.cast::<RlctMutexAttr>() }.pshared = pshared;
     0
 }
@@ -234,8 +247,9 @@ impl RlctMutexAttr {
             robust: PTHREAD_MUTEX_STALLED,
             pshared: PTHREAD_PROCESS_PRIVATE,
             protocol: PTHREAD_PRIO_NONE,
-            // TODO
-            prioceiling: 0,
+            // The highest priority: a mutex of PTHREAD_PRIO_PROTECT with no
+            // ceiling of its own can be locked by any thread.
+            prioceiling: 32,
             ty: PTHREAD_MUTEX_DEFAULT,
         }
     }

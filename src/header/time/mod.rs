@@ -258,10 +258,23 @@ pub extern "C" fn clock() -> clock_t {
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/clock_getcpuclockid.html>.
-// #[unsafe(no_mangle)]
-#[expect(unused_variables, reason = "function not yet implemented")]
-pub extern "C" fn clock_getcpuclockid(pid: pid_t, clock_id: *mut clockid_t) -> c_int {
-    unimplemented!();
+///
+/// stafeto: the CPU-time clock of the calling process; another process's
+/// CPU time is not the caller's to read (EPERM; ESRCH for none).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn clock_getcpuclockid(pid: pid_t, clock_id: *mut clockid_t) -> c_int {
+    if clock_id.is_null() {
+        return crate::header::errno::EINVAL;
+    }
+    if pid != 0 && pid != crate::header::unistd::getpid() {
+        return if crate::header::signal::kill(pid, 0) == 0 {
+            crate::header::errno::EPERM
+        } else {
+            crate::platform::ERRNO.get()
+        };
+    }
+    unsafe { clock_id.write(CLOCK_PROCESS_CPUTIME_ID) };
+    0
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/clock_getres.html>.

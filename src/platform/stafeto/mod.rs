@@ -105,6 +105,46 @@ unsafe extern "C" {
     /// kernel told of its end.
     fn stafeto_exit_thread(stack: *mut c_void, size: usize) -> !;
     fn stafeto_sched_yield() -> c_int;
+    /// The least (`max` 0) or the greatest (`max` 1) priority of `policy`,
+    /// or a negated errno (EINVAL for another policy).
+    fn stafeto_sched_priority_range(policy: c_int, max: c_int) -> c_int;
+    /// The policy of the process `pid` (0 for the caller's), or a negated
+    /// errno (ESRCH, EPERM).
+    fn stafeto_sched_getscheduler(pid: pid_t) -> c_int;
+    /// The priority of the process `pid` into `priority`: 0 or a negated errno.
+    fn stafeto_sched_getparam(pid: pid_t, priority: *mut c_int) -> c_int;
+    /// `policy` (negative: keep it) and `priority` for the process `pid`
+    /// (sched_setscheduler, sched_setparam): the previous policy, or a
+    /// negated errno (EINVAL, EPERM, ESRCH). The thread goes to the tail of
+    /// its level (XSH 2.8.4).
+    fn stafeto_sched_set(pid: pid_t, policy: c_int, priority: c_int) -> c_int;
+    /// The policy and priority of thread `tid`: 0 or a negated errno.
+    fn stafeto_thread_sched_get(tid: c_int, policy: *mut c_int, priority: *mut c_int) -> c_int;
+    /// `policy` (negative: keep it) and `priority` for thread `tid`
+    /// (pthread_setschedparam with `tail` 1, pthread_setschedprio with 0):
+    /// 0 or a negated errno.
+    fn stafeto_thread_sched_set(tid: c_int, policy: c_int, priority: c_int, tail: c_int) -> c_int;
+    /// The policy and priority of the next thread the caller makes (an
+    /// attribute object with PTHREAD_EXPLICIT_SCHED): 0 or a negated errno.
+    fn stafeto_thread_next_sched(policy: c_int, priority: c_int) -> c_int;
+    /// Waits as `stafeto_futex_wait` while the thread `owner` holds the
+    /// mutex word: the waiter's level goes to the owner (and along the
+    /// chain of what the owner waits for) until the wait ends. EDEADLK for a
+    /// cycle.
+    fn stafeto_futex_wait_pi(addr: *mut u32, val: u32, deadline: u64, owner: u32) -> c_int;
+    /// The owner of the mutex word unlocked it: its level, raised for the
+    /// waiters of this word, is worked out again without them; wakes up to
+    /// `count`.
+    fn stafeto_futex_wake_pi(addr: *mut u32, count: u32) -> u32;
+    /// The caller took the mutex word it waited for with others still
+    /// waiting: they wait for the caller now, and it takes their level.
+    fn stafeto_pi_acquired(addr: *mut u32);
+    /// The caller takes a PTHREAD_PRIO_PROTECT mutex of ceiling `priority`:
+    /// it runs at least at that level until `stafeto_protect_leave`.
+    /// 0, or a negated EINVAL for a priority above the ceiling.
+    fn stafeto_protect_enter(priority: c_int) -> c_int;
+    /// The caller let a PTHREAD_PRIO_PROTECT mutex of ceiling `priority` go.
+    fn stafeto_protect_leave(priority: c_int);
     fn stafeto_nanosleep(request: *const timespec, remaining: *mut timespec) -> c_int;
     fn stafeto_poll(fds: *mut pollfd, count: nfds_t, timeout: c_int) -> c_int;
     fn stafeto_ppoll(
@@ -170,6 +210,16 @@ unsafe extern "C" {
     fn stafeto_fchdir(fd: c_int) -> c_int;
     /// The canonical path of `path` into `buf` with its NUL: its length.
     fn stafeto_realpath(path: *const c_char, buf: *mut u8, len: usize) -> isize;
+    /// The CPU time in nanoseconds of the process (`who` 0), of its children
+    /// that were waited for (-1) or of the calling thread (1), or a negated
+    /// errno.
+    fn stafeto_cpu_ns(who: c_int) -> i64;
+    /// The id of the CPU-time clock of thread `tid`.
+    fn stafeto_thread_cpu_clock(tid: c_int) -> c_int;
+    /// 20 minus the nice value of the processes `which` and `who` name, or
+    /// a negated errno.
+    fn stafeto_getpriority(which: c_int, who: u32) -> c_int;
+    fn stafeto_setpriority(which: c_int, who: u32, nice: c_int) -> c_int;
     fn stafeto_getuid() -> uid_t;
     fn stafeto_geteuid() -> uid_t;
     fn stafeto_getgid() -> gid_t;
@@ -318,7 +368,7 @@ fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 18;
+const PLATFORM_INTERFACE: u64 = 19;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -459,6 +509,80 @@ pub(crate) fn set_cancel_type(kind: c_int) -> Result<c_int> {
     ret(unsafe { stafeto_setcanceltype(kind, &raw mut old) } as isize).map(|_| old)
 }
 
+/// The CPU time in nanoseconds of what `who` says (`stafeto_cpu_ns`).
+pub(crate) fn cpu_ns(who: c_int) -> Result<u64> {
+    ret(unsafe { stafeto_cpu_ns(who) } as isize).map(|v| v as u64)
+}
+
+/// The id of the CPU-time clock of thread `os_tid`.
+pub(crate) fn thread_cpu_clock(os_tid: crate::pthread::OsTid) -> clockid_t {
+    unsafe { stafeto_thread_cpu_clock(os_tid.thread_id as c_int) }
+}
+
+/// pthread_getschedparam: the policy and priority of the thread `os_tid`.
+pub(crate) fn thread_sched_get(os_tid: crate::pthread::OsTid) -> Result<(c_int, c_int)> {
+    let (mut policy, mut priority) = (0, 0);
+    ret(unsafe {
+        stafeto_thread_sched_get(os_tid.thread_id as c_int, &raw mut policy, &raw mut priority)
+    } as isize)
+    .map(|_| (policy, priority))
+}
+
+/// pthread_setschedparam (`tail` true) and pthread_setschedprio (`tail`
+/// false, `policy` negative): the policy and priority of the thread `os_tid`.
+pub(crate) fn thread_sched_set(
+    os_tid: crate::pthread::OsTid,
+    policy: c_int,
+    priority: c_int,
+    tail: bool,
+) -> Result<()> {
+    ret(unsafe {
+        stafeto_thread_sched_set(os_tid.thread_id as c_int, policy, priority, c_int::from(tail))
+    } as isize)
+    .map(|_| ())
+}
+
+/// The policy and priority of the thread pthread_create makes next.
+pub(crate) fn thread_next_sched(policy: c_int, priority: c_int) -> Result<()> {
+    ret(unsafe { stafeto_thread_next_sched(policy, priority) } as isize).map(|_| ())
+}
+
+/// The mutex word `addr`, which `owner` holds with PTHREAD_PRIO_INHERIT:
+/// waits while it holds `val`, the level of the waiter going to the owner.
+pub(crate) unsafe fn futex_wait_pi(
+    addr: *mut u32,
+    val: u32,
+    deadline: Option<&timespec>,
+    owner: u32,
+) -> Result<()> {
+    let deadline = deadline.map_or(u64::MAX, |d| {
+        if d.tv_sec < 0 {
+            0
+        } else {
+            (d.tv_sec as u64)
+                .saturating_mul(1_000_000_000)
+                .saturating_add(d.tv_nsec.clamp(0, 999_999_999) as u64)
+        }
+    });
+    ret(unsafe { stafeto_futex_wait_pi(addr, val, deadline, owner) } as isize).map(|_| ())
+}
+
+pub(crate) unsafe fn futex_wake_pi(addr: *mut u32, count: u32) -> u32 {
+    unsafe { stafeto_futex_wake_pi(addr, count) }
+}
+
+pub(crate) unsafe fn pi_acquired(addr: *mut u32) {
+    unsafe { stafeto_pi_acquired(addr) }
+}
+
+pub(crate) fn protect_enter(priority: c_int) -> Result<()> {
+    ret(unsafe { stafeto_protect_enter(priority) } as isize).map(|_| ())
+}
+
+pub(crate) fn protect_leave(priority: c_int) {
+    unsafe { stafeto_protect_leave(priority) }
+}
+
 /// Linux AArch64 layouts passed directly to posix-platform's wait calls.
 const _: () = {
     assert!(mem::size_of::<pollfd>() == 8);
@@ -513,6 +637,25 @@ const _: () = {
 pub struct Sys;
 
 impl Sys {
+    /// sched_get_priority_max (`max`) and sched_get_priority_min.
+    pub fn sched_priority_range(policy: c_int, max: bool) -> Result<c_int> {
+        ret(unsafe { stafeto_sched_priority_range(policy, c_int::from(max)) } as isize)
+            .map(|v| v as c_int)
+    }
+
+    pub fn sched_getscheduler(pid: pid_t) -> Result<c_int> {
+        ret(unsafe { stafeto_sched_getscheduler(pid) } as isize).map(|v| v as c_int)
+    }
+
+    pub fn sched_getparam(pid: pid_t) -> Result<c_int> {
+        let mut priority = 0;
+        ret(unsafe { stafeto_sched_getparam(pid, &raw mut priority) } as isize).map(|_| priority)
+    }
+
+    pub fn sched_set(pid: pid_t, policy: c_int, priority: c_int) -> Result<c_int> {
+        ret(unsafe { stafeto_sched_set(pid, policy, priority) } as isize).map(|v| v as c_int)
+    }
+
     /// Assign the slave device's ownership through its master description.
     pub fn grantpt(fd: c_int) -> Result<c_int> {
         // SAFETY: the layer validates the descriptor; this call takes no pointers.
@@ -801,7 +944,7 @@ impl Pal for Sys {
     }
 
     fn getpriority(which: c_int, who: id_t) -> Result<c_int> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_getpriority(which, who) } as isize).map(|v| v as c_int)
     }
 
     fn getrandom(buf: &mut [u8], flags: c_uint) -> Result<usize> {
@@ -853,8 +996,23 @@ impl Pal for Sys {
         ret(unsafe { stafeto_setrlimit(resource, rlimit) } as isize).map(drop)
     }
 
-    fn getrusage(who: c_int, r_usage: Out<rusage>) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn getrusage(who: c_int, mut r_usage: Out<rusage>) -> Result<()> {
+        // All of the time counts as user time: the kernel does not tell the
+        // time of a thread in a system call from the rest.
+        let ns = match who {
+            crate::header::sys_resource::RUSAGE_SELF => cpu_ns(0)?,
+            crate::header::sys_resource::RUSAGE_CHILDREN => cpu_ns(-1)?,
+            crate::header::sys_resource::RUSAGE_THREAD => cpu_ns(1)?,
+            _ => return Err(Errno(EINVAL)),
+        };
+        // SAFETY: every field of rusage is a number: zero is a value.
+        let mut usage: rusage = unsafe { mem::zeroed() };
+        usage.ru_utime = timeval {
+            tv_sec: (ns / 1_000_000_000) as _,
+            tv_usec: (ns % 1_000_000_000 / 1_000) as _,
+        };
+        r_usage.write(usage);
+        Ok(())
     }
 
     fn getsid(pid: pid_t) -> Result<pid_t> {
@@ -1129,7 +1287,7 @@ impl Pal for Sys {
     }
 
     fn setpriority(which: c_int, who: id_t, prio: c_int) -> Result<()> {
-        Err(Errno(ENOSYS))
+        ret(unsafe { stafeto_setpriority(which, who, prio) } as isize).map(|_| ())
     }
 
     fn setresgid(rgid: gid_t, egid: gid_t, sgid: gid_t) -> Result<()> {

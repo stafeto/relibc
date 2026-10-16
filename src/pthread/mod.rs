@@ -120,12 +120,38 @@ impl Drop for MmapGuard {
     }
 }
 
+/// The policy and priority the layer holds for the next thread of the
+/// caller go when `create` ends, whatever way it ends.
+#[cfg(stafeto)]
+struct NextSched;
+#[cfg(stafeto)]
+impl Drop for NextSched {
+    fn drop(&mut self) {
+        let _ = crate::platform::sys::thread_next_sched(-1, 0);
+    }
+}
+
 pub(crate) unsafe fn create(
     attrs: Option<&header::RlctAttr>,
     start_routine: extern "C" fn(arg: *mut c_void) -> *mut c_void,
     arg: *mut c_void,
 ) -> Result<pthread_t, Errno> {
     let attrs = attrs.cloned().unwrap_or_default();
+
+    // stafeto: PTHREAD_EXPLICIT_SCHED gives the new thread the policy and
+    // priority of the attributes; the layer takes them when it makes the
+    // thread, before the thread starts. PTHREAD_INHERIT_SCHED leaves it the
+    // creator's. EINVAL and EPERM come from the layer's check.
+    #[cfg(stafeto)]
+    let _next_sched = {
+        if i32::from(attrs.inheritsched) == header::PTHREAD_EXPLICIT_SCHED {
+            crate::platform::sys::thread_next_sched(
+                i32::from(attrs.schedpolicy),
+                attrs.param.sched_priority,
+            )?;
+        }
+        NextSched
+    };
 
     #[cfg(not(target_os = "redox"))]
     let current_sigmask = 0_u64;
@@ -461,16 +487,40 @@ pub unsafe fn cancel(thread: &Pthread) -> Result<(), Errno> {
 }
 
 pub fn set_sched_param(
-    _thread: &Pthread,
-    _policy: c_int,
-    _param: &sched_param,
+    thread: &Pthread,
+    policy: c_int,
+    param: &sched_param,
 ) -> Result<(), Errno> {
-    // TODO
-    Ok(())
+    // stafeto: the policy and priority of the thread go to the layer, which
+    // puts the thread at the tail of its new level (XSH 2.8.4).
+    #[cfg(stafeto)]
+    return crate::platform::sys::thread_sched_set(
+        unsafe { thread.os_tid.get().read() },
+        policy,
+        param.sched_priority,
+        true,
+    );
+    #[cfg(not(stafeto))]
+    {
+        let _ = (thread, policy, param);
+        Ok(())
+    }
 }
-pub fn set_sched_priority(_thread: &Pthread, _prio: c_int) -> Result<(), Errno> {
-    // TODO
-    Ok(())
+pub fn set_sched_priority(thread: &Pthread, prio: c_int) -> Result<(), Errno> {
+    // stafeto: pthread_setschedprio keeps the policy and the rules of the
+    // position (raised: tail, unchanged: stays, lowered: head).
+    #[cfg(stafeto)]
+    return crate::platform::sys::thread_sched_set(
+        unsafe { thread.os_tid.get().read() },
+        -1,
+        prio,
+        false,
+    );
+    #[cfg(not(stafeto))]
+    {
+        let _ = (thread, prio);
+        Ok(())
+    }
 }
 pub fn set_cancel_state(state: c_int) -> Result<c_int, Errno> {
     #[cfg(stafeto)]
@@ -520,15 +570,33 @@ pub fn set_cancel_type(ty: c_int) -> Result<c_int, Errno> {
     }
     Ok(header::PTHREAD_CANCEL_DEFERRED)
 }
-#[expect(unused_variables, reason = "function not yet fully implemented")]
 pub fn get_cpu_clkid(thread: &Pthread) -> Result<clockid_t, Errno> {
-    // TODO
-    Err(Errno(ENOENT))
+    #[cfg(stafeto)]
+    return Ok(crate::platform::sys::thread_cpu_clock(unsafe {
+        thread.os_tid.get().read()
+    }));
+    #[cfg(not(stafeto))]
+    {
+        let _ = thread;
+        Err(Errno(ENOENT))
+    }
 }
-#[expect(unused_variables, reason = "function not yet fully implemented")]
-pub fn get_sched_param(thread: &Pthread) -> Result<(clockid_t, sched_param), Errno> {
-    // TODO should be possible to return sched_param
-    Err(Errno(ENOSYS))
+pub fn get_sched_param(thread: &Pthread) -> Result<(c_int, sched_param), Errno> {
+    #[cfg(stafeto)]
+    return crate::platform::sys::thread_sched_get(unsafe { thread.os_tid.get().read() })
+        .map(|(policy, priority)| {
+            (
+                policy,
+                sched_param {
+                    sched_priority: priority,
+                },
+            )
+        });
+    #[cfg(not(stafeto))]
+    {
+        let _ = thread;
+        Err(Errno(ENOSYS))
+    }
 }
 
 // TODO: Hash map?

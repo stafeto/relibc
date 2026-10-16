@@ -17,6 +17,10 @@ pub struct RlctMutex {
 
     ty: Ty,
     robust: bool,
+    /// PTHREAD_PRIO_NONE, PTHREAD_PRIO_INHERIT or PTHREAD_PRIO_PROTECT.
+    protocol: u8,
+    /// The priority ceiling of PTHREAD_PRIO_PROTECT, 1 to 32.
+    prioceiling: u8,
 }
 
 const STATE_UNLOCKED: u32 = 0;
@@ -32,14 +36,28 @@ const SPIN_COUNT: usize = 0;
 impl RlctMutex {
     pub(crate) const fn new(attr: &RlctMutexAttr) -> Result<Self, Errno> {
         let RlctMutexAttr {
-            prioceiling: _,
-            protocol: _,
-            pshared: _,
+            prioceiling,
+            protocol,
+            pshared,
             robust,
             ty,
         } = *attr;
 
+        // A mutex shared between processes cannot lend its owner a level:
+        // the owner is a thread of another process (XSH, pthread_mutex_init
+        // allows ENOTSUP for a protocol the implementation lacks).
+        if protocol != PTHREAD_PRIO_NONE && pshared == PTHREAD_PROCESS_SHARED {
+            return Err(Errno(ENOTSUP));
+        }
+        match protocol {
+            PTHREAD_PRIO_NONE | PTHREAD_PRIO_INHERIT => (),
+            PTHREAD_PRIO_PROTECT if prioceiling >= 1 && prioceiling <= 32 => (),
+            _ => return Err(Errno(EINVAL)),
+        }
+
         Ok(Self {
+            protocol: protocol as u8,
+            prioceiling: prioceiling as u8,
             inner: AtomicUint::new(STATE_UNLOCKED),
             recursive_count: AtomicUint::new(0),
             robust: match robust {
@@ -58,13 +76,27 @@ impl RlctMutex {
             },
         })
     }
+    /// pthread_mutex_getprioceiling: the ceiling of the mutex.
     pub fn prioceiling(&self) -> Result<c_int, Errno> {
-        todo_skip!(0, "pthread_getprioceiling: not implemented");
-        Ok(0)
+        if i32::from(self.protocol) != PTHREAD_PRIO_PROTECT {
+            return Err(Errno(EINVAL));
+        }
+        Ok(c_int::from(self.prioceiling))
     }
-    pub fn replace_prioceiling(&self, _: c_int) -> Result<c_int, Errno> {
-        todo_skip!(0, "pthread_setprioceiling: not implemented");
-        Ok(0)
+    /// pthread_mutex_setprioceiling: locks the mutex (with the protocol's
+    /// rule: the caller's priority is at most the old ceiling), sets the
+    /// new ceiling and unlocks it; the old ceiling comes back.
+    pub fn replace_prioceiling(&self, ceiling: c_int) -> Result<c_int, Errno> {
+        if i32::from(self.protocol) != PTHREAD_PRIO_PROTECT || !(1..=32).contains(&ceiling) {
+            return Err(Errno(EINVAL));
+        }
+        self.lock()?;
+        let old = c_int::from(self.prioceiling);
+        // The mutex is ours: the ceiling is a word only its owner writes.
+        // SAFETY: the owner writes it, under the lock.
+        unsafe { core::ptr::from_ref(&self.prioceiling).cast_mut().write(ceiling as u8) };
+        self.unlock()?;
+        Ok(old)
     }
     pub fn make_consistent(&self) -> Result<(), Errno> {
         todo_skip!(0, "pthread robust mutexes: not implemented");
@@ -154,18 +186,59 @@ impl RlctMutex {
                     // the thread waited; the conversion above says
                     // ETIMEDOUT once the calendar passed it (POSIX: the new
                     // value of CLOCK_REALTIME applies to absolute waits).
-                    let _ = crate::sync::futex_wait(&self.inner, thread, monotonic.as_ref());
+                    if i32::from(self.protocol) == PTHREAD_PRIO_INHERIT {
+                        // The level of this thread goes to the owner, and
+                        // along the chain of what the owner waits for. A
+                        // cycle of owners is a deadlock.
+                        match unsafe {
+                            crate::platform::sys::futex_wait_pi(
+                                self.inner.as_ptr(),
+                                thread,
+                                monotonic.as_ref(),
+                                thread & INDEX_MASK,
+                            )
+                        } {
+                            Err(Errno(EDEADLK)) => return Err(Errno(EDEADLK)),
+                            Err(Errno(ETIMEDOUT)) if monotonic.is_some() => (),
+                            _ => (),
+                        }
+                    } else {
+                        let _ = crate::sync::futex_wait(&self.inner, thread, monotonic.as_ref());
+                    }
                     waited = WAITING_BIT;
                 }
             }
         }
     }
+    /// PTHREAD_PRIO_PROTECT: the thread runs at least at the ceiling from
+    /// before it locks until it unlocks (EINVAL for a thread above it).
+    fn protect_enter(&self) -> Result<(), Errno> {
+        if i32::from(self.protocol) == PTHREAD_PRIO_PROTECT {
+            crate::platform::sys::protect_enter(c_int::from(self.prioceiling))?;
+        }
+        Ok(())
+    }
+    fn protect_leave(&self) {
+        if i32::from(self.protocol) == PTHREAD_PRIO_PROTECT {
+            crate::platform::sys::protect_leave(c_int::from(self.prioceiling));
+        }
+    }
     pub fn lock(&self) -> Result<(), Errno> {
-        self.lock_inner(None)
+        self.protect_enter()?;
+        let locked = self.lock_inner(None);
+        if locked.is_err() {
+            self.protect_leave();
+        }
+        locked
     }
     /// `lock` until `deadline`, an absolute time on CLOCK_REALTIME.
     pub fn lock_with_timeout(&self, deadline: &timespec) -> Result<(), Errno> {
-        self.lock_inner(Some(deadline))
+        self.protect_enter()?;
+        let locked = self.lock_inner(Some(deadline));
+        if locked.is_err() {
+            self.protect_leave();
+        }
+        locked
     }
     fn increment_recursive_count(&self) -> Result<(), Errno> {
         // We don't have to worry about asynchronous signals here, since pthread_mutex_trylock
@@ -186,6 +259,14 @@ impl RlctMutex {
         Ok(())
     }
     pub fn try_lock(&self) -> Result<(), Errno> {
+        self.protect_enter()?;
+        let locked = self.try_lock_inner();
+        if locked.is_err() {
+            self.protect_leave();
+        }
+        locked
+    }
+    fn try_lock_inner(&self) -> Result<(), Errno> {
         let this_thread = os_tid_invalid_after_fork();
 
         // TODO: If recursive, omitting CAS may be faster if it is already owned by this thread.
@@ -228,15 +309,24 @@ impl RlctMutex {
             self.recursive_count.store(next, Ordering::Relaxed);
 
             if next > 0 {
+                self.protect_leave();
                 return Ok(());
             }
         }
 
         // One waiter at a time: it takes the lock with WAITING_BIT, so the
-        // next unlock wakes the next one.
+        // next unlock wakes the next one. With PTHREAD_PRIO_INHERIT all
+        // wake: those that lose the race wait for the new owner and lend it
+        // their level, and this thread's level, raised for them, is worked
+        // out again.
         if self.inner.swap(STATE_UNLOCKED, Ordering::Release) & WAITING_BIT != 0 {
-            crate::sync::futex_wake(&self.inner, 1);
+            if i32::from(self.protocol) == PTHREAD_PRIO_INHERIT {
+                unsafe { crate::platform::sys::futex_wake_pi(self.inner.as_ptr(), u32::MAX) };
+            } else {
+                crate::sync::futex_wake(&self.inner, 1);
+            }
         }
+        self.protect_leave();
 
         Ok(())
     }

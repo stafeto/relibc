@@ -144,6 +144,10 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         _SC_BARRIERS
         | _SC_MESSAGE_PASSING
         | _SC_MONOTONIC_CLOCK
+        | _SC_PRIORITY_SCHEDULING
+        | _SC_THREAD_PRIORITY_SCHEDULING
+        | _SC_THREAD_PRIO_INHERIT
+        | _SC_THREAD_PRIO_PROTECT
         | _SC_SEMAPHORES
         | _SC_SPAWN
         | _SC_THREADS
@@ -194,7 +198,6 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_MEMLOCK_RANGE
         | _SC_MEMORY_PROTECTION
         | _SC_SHARED_MEMORY_OBJECTS
-        | _SC_THREAD_PRIORITY_SCHEDULING
         | _SC_THREAD_PROCESS_SHARED
         | _SC_ADVISORY_INFO
         | _SC_CPUTIME

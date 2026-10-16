@@ -64,11 +64,11 @@ pub const PTHREAD_MUTEX_RECURSIVE: c_int = 3;
 pub const PTHREAD_MUTEX_ROBUST: c_int = 0;
 pub const PTHREAD_MUTEX_STALLED: c_int = 1;
 
-pub const PTHREAD_PRIO_INHERIT: c_int = 0;
+pub const PTHREAD_PRIO_INHERIT: c_int = 1;
 
 pub const PTHREAD_PRIO_NONE: c_int = 0;
 
-pub const PTHREAD_PRIO_PROTECT: c_int = 0;
+pub const PTHREAD_PRIO_PROTECT: c_int = 2;
 
 /// Permits a condition variable to be operated upon by any thread that has
 /// access to the memory where the condition variable is allocated, even if the
