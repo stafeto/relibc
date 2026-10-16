@@ -1,0 +1,45 @@
+# POSIX header spec: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/nl_types.h.html
+#
+# Spec quotations relating to includes:
+# - "The <nl_types.h> header shall define the nl_catd and nl_item types."
+# The catalog file is the format of the BSDs (big endian), which gencat writes.
+sys_includes = []
+include_guard = "_RELIBC_NL_TYPES_H"
+after_includes = """
+#include <bits/size-t.h> // for size_t
+
+typedef size_t nl_item;
+
+#ifdef _NLS_PRIVATE
+/* The file of a message catalog (gencat): a header, set headers, message
+ * headers and the texts, every number big endian. */
+#define _NLS_MAGIC 0xff88ff89
+struct _nls_cat_hdr {
+  int __magic;
+  int __nsets;
+  int __mem;
+  int __msg_hdr_offset;
+  int __msg_txt_offset;
+};
+struct _nls_set_hdr {
+  int __setno;
+  int __nmsgs;
+  int __index;
+};
+struct _nls_msg_hdr {
+  int __msgno;
+  int __msglen;
+  int __offset;
+};
+#endif
+"""
+language = "C"
+style = "Tag"
+no_includes = true
+cpp_compat = true
+
+[enum]
+prefix_with_name = true
+
+[export]
+include = ["__nl_cat_d"]

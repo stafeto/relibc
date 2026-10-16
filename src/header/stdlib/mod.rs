@@ -1443,18 +1443,6 @@ pub unsafe extern "C" fn setenv(
     0
 }
 
-/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/setkey.html>.
-///
-/// # Deprecation
-/// The `setkey()` function was marked as obsolescent in the Open Group Base
-/// Specifications Issue 8.
-#[deprecated]
-// #[unsafe(no_mangle)]
-#[expect(unused_variables, reason = "function not yet implemented")]
-pub unsafe extern "C" fn setkey(key: *const c_char) {
-    unimplemented!();
-}
-
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/initstate.html>.
 // Ported from musl. The state parameter is no longer const in newer versions of POSIX.
 #[unsafe(no_mangle)]

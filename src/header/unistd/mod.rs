@@ -246,8 +246,9 @@ pub unsafe extern "C" fn confstr(name: c_int, buf: *mut c_char, len: size_t) -> 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/crypt.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn crypt(key: *const c_char, salt: *const c_char) -> *mut c_char {
-    let mut data = crypt_data::new();
-    unsafe { crypt_r(key, salt, &raw mut data) }
+    // The result lives in a buffer of the library, as the interface says.
+    static mut DATA: crypt_data = crypt_data::new();
+    unsafe { crypt_r(key, salt, &raw mut DATA) }
 }
 
 /// Non-POSIX, see <https://www.man7.org/linux/man-pages/man3/daemon.3.html>.

@@ -142,7 +142,9 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // also requires the missing aio_fsync interface and aio.h.
         _SC_FSYNC => -1,
         _SC_BARRIERS
+        | _SC_MESSAGE_PASSING
         | _SC_MONOTONIC_CLOCK
+        | _SC_SEMAPHORES
         | _SC_SPAWN
         | _SC_THREADS
         | _SC_THREAD_ATTR_STACKADDR
@@ -156,6 +158,14 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         _SC_DELAYTIMER_MAX => 2147483647,
         _SC_SIGQUEUE_MAX => 31,
         _SC_JOB_CONTROL | _SC_SAVED_IDS | _SC_SHELL => 1,
+        // The message queues and named semaphores of the pipe service: the
+        // descriptors a process opens (those of the sockets, 20 for a session),
+        // the priorities (below 32768), the semaphores a process has open, and
+        // the largest value.
+        _SC_MQ_OPEN_MAX => 20,
+        _SC_MQ_PRIO_MAX => 32768,
+        _SC_SEM_NSEMS_MAX => 16,
+        _SC_SEM_VALUE_MAX => 32767,
         // A lowered process limit constrains allocation; infinity does not
         // enlarge the layer's physical descriptor table.
         _SC_OPEN_MAX => {
@@ -183,8 +193,6 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_MEMLOCK
         | _SC_MEMLOCK_RANGE
         | _SC_MEMORY_PROTECTION
-        | _SC_MESSAGE_PASSING
-        | _SC_SEMAPHORES
         | _SC_SHARED_MEMORY_OBJECTS
         | _SC_THREAD_PRIORITY_SCHEDULING
         | _SC_THREAD_PROCESS_SHARED

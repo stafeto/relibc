@@ -27,14 +27,16 @@ after_includes = """
 // name what passes acceptance, and sysconf (sysconf/linux.rs) answers the
 // same. Left out until their functions work: _POSIX_REALTIME_SIGNALS (the layer
 // has the signals 1 to 31 with one place for each, and refuses SIGRTMIN to
-// SIGRTMAX), _POSIX_SEMAPHORES (sem_open), _POSIX_SHARED_MEMORY_OBJECTS
+// SIGRTMAX), _POSIX_SHARED_MEMORY_OBJECTS
 // (MAP_SHARED), and the XSI option (_XOPEN_UNIX, _XOPEN_VERSION, _XOPEN_SHM).
 #define _POSIX_SUBPROFILE 1
 #define _POSIX_VERSION 202405L
 // _POSIX_FSYNC remains omitted until aio_fsync and aio.h are implemented.
 // Synchronous RAM fsync works independently of that complete option.
 #define _POSIX_BARRIERS 202405L
+#define _POSIX_MESSAGE_PASSING 202405L
 #define _POSIX_MONOTONIC_CLOCK 202405L
+#define _POSIX_SEMAPHORES 202405L
 #define _POSIX_SHELL 1
 #define _POSIX_SPAWN 202405L
 #define _POSIX_JOB_CONTROL 1
@@ -44,6 +46,16 @@ after_includes = """
 #define _POSIX_THREAD_ATTR_STACKSIZE 202405L
 #define _POSIX_TIMEOUTS 202405L
 #define _POSIX_TIMERS 202405L
+"""
+trailer = """
+#ifdef __cplusplus
+extern "C" {
+#endif
+/* The traditional DES block of src/c/crypt_des.c (setkey is in stdlib.h). */
+void encrypt(char block[64], int edflag);
+#ifdef __cplusplus
+}
+#endif
 """
 language = "C"
 style = "Tag"

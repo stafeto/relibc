@@ -3,10 +3,7 @@
 //! Non-POSIX, see <https://www.man7.org/linux/man-pages/man3/crypt.3.html>.
 
 use ::scrypt::password_hash::{Salt, SaltString};
-use alloc::{
-    ffi::CString,
-    string::{String, ToString},
-};
+use alloc::string::{String, ToString};
 use core::ptr;
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 
@@ -38,6 +35,11 @@ use self::{
     },
 };
 
+unsafe extern "C" {
+    /// Traditional DES crypt of musl (src/c/crypt_des.c); "*" or "x" on a bad setting.
+    fn __crypt_des(key: *const c_char, setting: *const c_char, output: *mut c_char) -> *mut c_char;
+}
+
 /// See <https://www.man7.org/linux/man-pages/man3/crypt.3.html>.
 #[repr(C)]
 pub struct crypt_data {
@@ -47,7 +49,7 @@ pub struct crypt_data {
 
 impl crypt_data {
     #[expect(clippy::new_without_default)]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         crypt_data {
             initialized: 1,
             buff: [0; 256],
@@ -73,6 +75,8 @@ pub unsafe extern "C" fn crypt_r(
         unsafe { *data = crypt_data::new() };
     }
 
+    let key_ptr = key;
+    let setting_ptr = setting;
     let key = unsafe { CStr::from_ptr(key) }.to_bytes();
     let Ok(setting) = unsafe { CStr::from_ptr(setting) }.to_str() else {
         platform::ERRNO.set(EINVAL);
@@ -99,20 +103,31 @@ pub unsafe extern "C" fn crypt_r(
             return ptr::null_mut();
         }
     } else {
-        None
+        // The Traditional DES of src/c/crypt_des.c: a setting of two characters
+        // of the alphabet ./0-9A-Za-z, or an extended one that starts with '_'.
+        let mut out = [0 as c_char; 21];
+        let hashed = unsafe { __crypt_des(key_ptr, setting_ptr, out.as_mut_ptr()) };
+        let text = unsafe { CStr::from_ptr(hashed) }.to_bytes();
+        if text.first() == Some(&b'*') || text == b"x" {
+            // The failure token of musl: a setting no table takes.
+            platform::ERRNO.set(EINVAL);
+            return ptr::null_mut();
+        }
+        core::str::from_utf8(text).ok().map(ToString::to_string)
     };
 
     if let Some(inner) = encoded {
-        let len = inner.len();
-        if let Ok(ret) = CString::new(inner) {
-            let ret_ptr = ret.into_raw();
-            unsafe {
-                let dst = (*data).buff.as_mut_ptr();
-                ptr::copy_nonoverlapping(ret_ptr, dst.cast(), len);
-            }
-            ret_ptr.cast()
-        } else {
-            ptr::null_mut()
+        let bytes = inner.as_bytes();
+        // The result and its NUL fit the buffer of the data.
+        if bytes.len() + 1 > unsafe { (*data).buff.len() } {
+            platform::ERRNO.set(EINVAL);
+            return ptr::null_mut();
+        }
+        unsafe {
+            let dst = (*data).buff.as_mut_ptr();
+            ptr::copy_nonoverlapping(bytes.as_ptr().cast(), dst, bytes.len());
+            *dst.add(bytes.len()) = 0;
+            dst
         }
     } else {
         ptr::null_mut()

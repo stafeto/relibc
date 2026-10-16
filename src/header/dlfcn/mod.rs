@@ -7,12 +7,16 @@
 #![warn(warnings, unused_variables)]
 
 use core::{
-    ptr, str,
+    ptr,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[cfg(not(stafeto))]
 use alloc::sync::Arc;
+#[cfg(not(stafeto))]
+use core::str;
 
+#[cfg(not(stafeto))]
 use crate::{
     c_str::CStr,
     ld_so::{
@@ -20,8 +24,8 @@ use crate::{
         linker::{DlError, Resolve, ScopeKind},
         tcb::Tcb,
     },
-    platform::types::{c_char, c_int, c_void},
 };
+use crate::platform::types::{c_char, c_int, c_void};
 
 /// Relocations are performed at an implementation-defined time.
 pub const RTLD_LAZY: c_int = 1 << 0;
@@ -47,11 +51,28 @@ pub const RTLD_LOCAL: c_int = 0x0000;
 )]
 pub const RTLD_DEFAULT: *mut c_void = 0 as *mut c_void; // XXX: cbindgen doesn't like ptr::null_mut() for publically exported constants
 
+#[cfg_attr(stafeto, allow(dead_code))]
 static ERROR_NOT_SUPPORTED: &core::ffi::CStr = c"dlfcn not supported";
+
+/// stafeto links every program statically: no shared object is loaded and a
+/// program carries no table of symbols. `dlopen(NULL)` answers a handle of
+/// the program all the same, as the standard says, which `dlsym` finds no
+/// symbol in and `dlclose` accepts; every other call says why it fails.
+#[cfg(stafeto)]
+mod fixed {
+    pub static PROGRAM: u8 = 0;
+    pub const NO_OBJECTS: &core::ffi::CStr =
+        c"dlopen: this system links programs statically and loads no shared object";
+    pub const NO_SYMBOLS: &core::ffi::CStr =
+        c"dlsym: the program carries no table of symbols to search by name";
+    pub const NO_HANDLE: &core::ffi::CStr = c"dlclose: not a handle that dlopen gave";
+    pub const NO_MODE: &core::ffi::CStr = c"dlopen: the mode has neither RTLD_LAZY nor RTLD_NOW";
+}
 
 #[thread_local]
 static ERROR: AtomicUsize = AtomicUsize::new(0);
 
+#[cfg(not(stafeto))]
 fn set_last_error(error: DlError) {
     ERROR.store(error.repr().as_ptr() as usize, Ordering::SeqCst);
 }
@@ -89,6 +110,20 @@ pub unsafe extern "C" fn dladdr(_addr: *const c_void, info: *mut Dl_info_t) -> c
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/dlopen.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dlopen(cfilename: *const c_char, flags: c_int) -> *mut c_void {
+    #[cfg(stafeto)]
+    {
+        if flags & (RTLD_LAZY | RTLD_NOW) == 0 {
+            ERROR.store(fixed::NO_MODE.as_ptr() as usize, Ordering::SeqCst);
+            return ptr::null_mut();
+        }
+        if cfilename.is_null() {
+            return (&raw const fixed::PROGRAM).cast_mut().cast::<c_void>();
+        }
+        ERROR.store(fixed::NO_OBJECTS.as_ptr() as usize, Ordering::SeqCst);
+        return ptr::null_mut();
+    }
+    #[cfg(not(stafeto))]
+    {
     //TODO support all sort of flags
     let resolve = if flags & RTLD_NOW == RTLD_NOW {
         Resolve::Now
@@ -133,11 +168,20 @@ pub unsafe extern "C" fn dlopen(cfilename: *const c_char, flags: c_int) -> *mut 
             ptr::null_mut()
         }
     }
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/dlsym.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void {
+    #[cfg(stafeto)]
+    {
+        let _ = (handle, symbol);
+        ERROR.store(fixed::NO_SYMBOLS.as_ptr() as usize, Ordering::SeqCst);
+        return ptr::null_mut();
+    }
+    #[cfg(not(stafeto))]
+    {
     let handle = unsafe { handle.cast::<DSO>().as_ref() };
 
     if symbol.is_null() {
@@ -169,11 +213,22 @@ pub unsafe extern "C" fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *m
             ptr::null_mut()
         }
     }
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/dlclose.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dlclose(handle: *mut c_void) -> c_int {
+    #[cfg(stafeto)]
+    {
+        if handle.cast_const() == (&raw const fixed::PROGRAM).cast::<c_void>() {
+            return 0;
+        }
+        ERROR.store(fixed::NO_HANDLE.as_ptr() as usize, Ordering::SeqCst);
+        return -1;
+    }
+    #[cfg(not(stafeto))]
+    {
     let Some(tcb) = (unsafe { Tcb::current() }) else {
         ERROR.store(ERROR_NOT_SUPPORTED.as_ptr() as usize, Ordering::SeqCst);
         return -1;
@@ -193,6 +248,7 @@ pub unsafe extern "C" fn dlclose(handle: *mut c_void) -> c_int {
     let obj = unsafe { Arc::from_raw(handle.cast::<DSO>()) };
     linker.unload(obj);
     0
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/dlerror.html>.

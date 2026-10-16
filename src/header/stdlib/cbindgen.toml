@@ -26,6 +26,8 @@ extern "C" {
 #endif
 
 long double strtold(const char *nptr, char **endptr);
+/* The traditional DES key and block of src/c/crypt_des.c. */
+void setkey(const char *key);
 
 #ifdef __cplusplus
 }

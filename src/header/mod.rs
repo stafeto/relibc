@@ -116,14 +116,14 @@ pub mod malloc;
 #[cfg(feature = "math_libm")]
 pub mod math;
 pub mod monetary;
-// TODO: mqueue.h
+pub mod mqueue;
+pub mod nl_types;
 // TODO: ndbm.h
 pub mod net_if;
 pub mod netdb;
 pub mod netinet_in;
 pub mod netinet_ip;
 pub mod netinet_tcp;
-// TODO: nl_types.h
 // TODO: Remove C header paths.h when cbindgen can export C/Rust strs
 // pub mod paths;
 pub mod poll;
@@ -159,10 +159,12 @@ pub mod sys_file;
 pub mod sys_ioctl;
 pub mod sys_ipc;
 pub mod sys_mman;
+pub mod sys_msg;
 // TODO: sys/msg.h
 pub mod sys_ptrace;
 pub mod sys_resource;
 pub mod sys_select;
+pub mod sys_sem;
 // TODO: sys/sem.h
 pub mod sys_shm;
 pub mod sys_socket;

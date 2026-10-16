@@ -1,0 +1,28 @@
+# POSIX header spec: https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/mqueue.h.html
+#
+# Spec quotations relating to includes:
+# - "The <mqueue.h> header shall define the pthread_attr_t, size_t, and ssize_t types as described in <sys/types.h>."
+# - "The <mqueue.h> header shall define the sigevent structure as described in <signal.h>."
+# - "The <mqueue.h> header shall define the timespec structure as described in <time.h>."
+sys_includes = ["signal.h"]
+include_guard = "_RELIBC_MQUEUE_H"
+after_includes = """
+#include <bits/size-t.h>     // for size_t from sys/types.h
+#include <bits/ssize-t.h>    // for ssize_t from sys/types.h
+#include <bits/timespec.h>   // for timespec from time.h
+#include <bits/mode-t.h>     // for mode_t (mq_open)
+"""
+language = "C"
+style = "Tag"
+no_includes = true
+cpp_compat = true
+
+[enum]
+prefix_with_name = true
+
+[export]
+include = ["mq_attr"]
+
+[export.rename]
+"timespec" = "struct timespec"
+"sigevent" = "struct sigevent"

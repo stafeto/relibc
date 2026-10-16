@@ -355,10 +355,47 @@ pub unsafe extern "C" fn difftime(time1: time_t, time0: time_t) -> c_double {
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getdate.html>.
-// #[unsafe(no_mangle)]
-#[expect(unused_variables, reason = "function not yet implemented")]
+///
+/// The templates are the lines of the file named by DATEMSK; the first that
+/// takes the whole string fills a structure of the library. `getdate_err`
+/// tells why not: 1 no DATEMSK, 2 the file cannot be opened, 3 its status
+/// cannot be read, 4 it is no regular file, 5 it cannot be read, 6 no
+/// memory, 7 no line takes the string.
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn getdate(string: *const c_char) -> *const tm {
-    unimplemented!();
+    use crate::io::{BufRead, BufReader};
+    static GETDATE_TM: RawCell<tm> = RawCell::new(blank_tm());
+    let fail = |code: c_int| -> *const tm {
+        unsafe { getdate_err = code };
+        ptr::null()
+    };
+    let mask = unsafe { getenv(c"DATEMSK".as_ptr().cast()) };
+    if mask.is_null() || unsafe { *mask } == 0 {
+        return fail(1);
+    }
+    let file = match crate::fs::File::open(unsafe { CStr::from_ptr(mask) }, crate::header::fcntl::O_RDONLY) {
+        Ok(file) => file,
+        Err(error) if error.0 == ENOMEM => return fail(6),
+        Err(_) => return fail(2),
+    };
+    match file.fstat() {
+        Ok(status) if status.st_mode & crate::header::sys_stat::S_IFMT == crate::header::sys_stat::S_IFREG => {}
+        Ok(_) => return fail(4),
+        Err(_) => return fail(3),
+    }
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            return fail(5);
+        };
+        let Ok(template) = CString::new(line) else {
+            continue;
+        };
+        let end = unsafe { strptime::strptime(string, template.as_ptr(), GETDATE_TM.as_mut_ptr()) };
+        if !end.is_null() && unsafe { *end } == 0 {
+            return GETDATE_TM.as_mut_ptr();
+        }
+    }
+    fail(7)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/gmtime.html>.

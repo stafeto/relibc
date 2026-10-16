@@ -29,7 +29,7 @@ pub struct if_nameindex {
 pub const IF_NAMESIZE: usize = 16;
 
 /// cbindgen:ignore
-const IF_STUB_INTERFACE: *const c_char = (c"stub").as_ptr();
+const IF_STUB_INTERFACE: *const c_char = (c"lo").as_ptr();
 
 /// cbindgen:ignore
 const INTERFACES: &[if_nameindex] = &[
@@ -53,16 +53,17 @@ pub unsafe extern "C" fn if_freenameindex(_s: *mut if_nameindex) {}
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/if_indextoname.html>.
 ///
 /// # Safety
-/// Returns only static lifetime references to const names, does not reuse the buf pointer.
+/// Writes the name of the loopback interface, the only one (index 1), into `buf`.
 /// Returns NULL in case of not found + ERRNO being set to ENXIO.
-/// Currently only checks against inteface index 1.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn if_indextoname(idx: c_uint, _buf: *mut c_char) -> *const c_char {
-    if idx == 1 {
-        return IF_STUB_INTERFACE;
+pub unsafe extern "C" fn if_indextoname(idx: c_uint, buf: *mut c_char) -> *mut c_char {
+    if idx == 1 && !buf.is_null() {
+        // The name and its NUL, at most IF_NAMESIZE bytes, in the caller's buffer.
+        unsafe { core::ptr::copy_nonoverlapping(c"lo".as_ptr(), buf, 3) };
+        return buf;
     }
     ERRNO.set(ENXIO);
-    null::<c_char>()
+    core::ptr::null_mut()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/if_nameindex.html>.
@@ -86,7 +87,7 @@ pub unsafe extern "C" fn if_nametoindex(name: *const c_char) -> c_uint {
         return 0;
     }
     let name = unsafe { CStr::from_ptr(name).to_str().unwrap_or("") };
-    if name.eq("stub") {
+    if name.eq("lo") {
         return 1;
     }
     0

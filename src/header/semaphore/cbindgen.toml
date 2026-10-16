@@ -12,6 +12,10 @@ after_includes = """
 #include <bits/clockid-t.h> // for clockid_t from sys/types.h
 #include <bits/timespec.h>  // for timespec from time.h
 """
+trailer = """
+/* The value of sem_open for a failure (POSIX leaves it to the system). */
+#define SEM_FAILED ((sem_t *) 0)
+"""
 language = "C"
 style = "Type"
 no_includes = true
