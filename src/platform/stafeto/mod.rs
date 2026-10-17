@@ -187,8 +187,9 @@ unsafe extern "C" {
     fn stafeto_thread_release(id: c_int);
     /// Frees what the threads that ended and were released held.
     fn stafeto_collect();
-    /// Whether the table of mappings has room for a guard area.
-    fn stafeto_guard_room() -> c_int;
+    /// The stack of a new thread: `size` bytes with `guard` bytes of hole
+    /// below them. Its lowest address, or a negated errno.
+    fn stafeto_stack_map(size: usize, guard: usize) -> isize;
     fn stafeto_ioctl(fd: c_int, request: c_ulong, arg: *mut c_void) -> c_int;
     fn stafeto_tcgetattr(fd: c_int, out: *mut c_void) -> c_int;
     /// The name of the terminal `fd` is, NUL-terminated, into `len` bytes at
@@ -378,7 +379,7 @@ fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 19;
+const PLATFORM_INTERFACE: u64 = 20;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -490,9 +491,11 @@ pub(crate) fn thread_leaving() {
     unsafe { stafeto_thread_leaving() }
 }
 
-/// Whether a guard area for a stack may be cut.
-pub(crate) fn guard_room() -> bool {
-    unsafe { stafeto_guard_room() != 0 }
+/// The stack of a new thread, `size` bytes with `guard` bytes of hole below
+/// them: no mapping and no memory, so a reference there faults and the
+/// guard costs no quota. The lowest address of the stack.
+pub(crate) fn stack_map(size: usize, guard: usize) -> Result<*mut c_void> {
+    ret(unsafe { stafeto_stack_map(size, guard) }).map(|address| address as *mut c_void)
 }
 
 /// Frees the stacks and blocks of released threads that ended.

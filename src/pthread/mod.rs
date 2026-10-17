@@ -13,9 +13,11 @@ use redox_rt::{
     arch::{STACK_SIZE, STACK_TOP},
 };
 
+#[cfg(not(stafeto))]
+use crate::header::sys_mman;
 use crate::{
     error::Errno,
-    header::{errno::*, pthread as header, sched::sched_param, sys_mman},
+    header::{errno::*, pthread as header, sched::sched_param},
     ld_so::tcb::Tcb,
     platform::{
         Pal, Sys,
@@ -180,10 +182,11 @@ pub(crate) unsafe fn create(
         attrs.stacksize.next_multiple_of(Sys::getpagesize())
     };
 
-    // stafeto: the guard area of a stack relibc maps is the pages below it,
-    // with no access, so that a stack that overflows faults.
+    // stafeto: the guard of a stack relibc maps is a hole just below it: no
+    // mapping, no memory and no entry of the kernel's table, so that a stack
+    // that overflows faults. A stack the application gave has none.
     #[cfg(stafeto)]
-    let guard = if attrs.stack == 0 && crate::platform::sys::guard_room() {
+    let guard = if attrs.stack == 0 {
         attrs.guardsize.next_multiple_of(Sys::getpagesize())
     } else {
         0
@@ -193,6 +196,9 @@ pub(crate) unsafe fn create(
     let stack_base = if attrs.stack != 0 {
         attrs.stack as *mut c_void
     } else {
+        #[cfg(stafeto)]
+        let map = || crate::platform::sys::stack_map(stack_size, guard);
+        #[cfg(not(stafeto))]
         let map = || unsafe {
             sys_mman::mmap(
                 core::ptr::null_mut(),
@@ -209,21 +215,28 @@ pub(crate) unsafe fn create(
         // collection, which this call made only after the stack: where the
         // memory is short, collect first and try once more.
         #[cfg(stafeto)]
-        if ret as isize == -1 {
+        if ret.is_err() {
             crate::platform::sys::collect();
             ret = map();
         }
-        if ret as isize == -1 {
+        #[cfg(stafeto)]
+        let Ok(base) = ret else {
             // "Insufficient resources"
             return Err(Errno(EAGAIN));
-        }
-        // The lowest pages lose their access (and their memory): a stack
-        // that overflows faults there. They stay part of the mapping, which
-        // is given back whole.
-        if guard != 0 {
-            unsafe { sys_mman::mprotect(ret, guard, sys_mman::PROT_NONE) };
-        }
-        unsafe { ret.add(guard) }
+        };
+        #[cfg(not(stafeto))]
+        let base = {
+            if ret as isize == -1 {
+                return Err(Errno(EAGAIN));
+            }
+            // The lowest pages lose their access: a stack that overflows
+            // faults there.
+            if guard != 0 {
+                unsafe { sys_mman::mprotect(ret, guard, sys_mman::PROT_NONE) };
+            }
+            unsafe { ret.add(guard) }
+        };
+        base
     };
 
     let mut flags = PthreadFlags::empty();

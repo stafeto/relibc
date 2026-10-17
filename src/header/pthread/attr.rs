@@ -28,8 +28,9 @@ impl Default for RlctAttr {
             // TODO: Linux uses this one.
             scope: c_uchar::try_from(PTHREAD_SCOPE_SYSTEM).expect("constant value within bounds"),
             // One page, as everywhere: a stack that overflows faults. On
-            // stafeto the page is mapped and given back at once, so it
-            // costs no quota.
+            // stafeto the page is a hole below the stack (no mapping, no
+            // memory), so it costs no quota and no place in the kernel's
+            // table.
             guardsize: <crate::platform::Sys as crate::platform::Pal>::getpagesize(),
             // TODO
             stack: 0,
