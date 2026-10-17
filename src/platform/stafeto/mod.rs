@@ -222,6 +222,9 @@ unsafe extern "C" {
     /// that were waited for (-1) or of the calling thread (1), or a negated
     /// errno.
     fn stafeto_cpu_ns(who: c_int) -> i64;
+    /// The part of `stafeto_cpu_ns(who)` spent in the kernel, or a negated
+    /// errno.
+    fn stafeto_cpu_system_ns(who: c_int) -> i64;
     /// The id of the CPU-time clock of thread `tid`.
     fn stafeto_thread_cpu_clock(tid: c_int) -> c_int;
     /// 20 minus the nice value of the processes `which` and `who` name, or
@@ -541,6 +544,16 @@ pub(crate) fn set_cancel_type(kind: c_int) -> Result<c_int> {
 /// The CPU time in nanoseconds of what `who` says (`stafeto_cpu_ns`).
 pub(crate) fn cpu_ns(who: c_int) -> Result<u64> {
     ret(unsafe { stafeto_cpu_ns(who) } as isize).map(|v| v as u64)
+}
+
+/// The user and the system time in nanoseconds of what `who` says: the system
+/// time is what the layer counts in the kernel, the user time is the rest of
+/// the whole.
+pub(crate) fn cpu_split_ns(who: c_int) -> Result<(u64, u64)> {
+    let total = cpu_ns(who)?;
+    let system = ret(unsafe { stafeto_cpu_system_ns(who) } as isize).map(|v| v as u64)?;
+    let system = system.min(total);
+    Ok((total - system, system))
 }
 
 /// The id of the CPU-time clock of thread `os_tid`.
@@ -1026,20 +1039,20 @@ impl Pal for Sys {
     }
 
     fn getrusage(who: c_int, mut r_usage: Out<rusage>) -> Result<()> {
-        // All of the time counts as user time: the kernel does not tell the
-        // time of a thread in a system call from the rest.
-        let ns = match who {
-            crate::header::sys_resource::RUSAGE_SELF => cpu_ns(0)?,
-            crate::header::sys_resource::RUSAGE_CHILDREN => cpu_ns(-1)?,
-            crate::header::sys_resource::RUSAGE_THREAD => cpu_ns(1)?,
+        let (user, system) = match who {
+            crate::header::sys_resource::RUSAGE_SELF => cpu_split_ns(0)?,
+            crate::header::sys_resource::RUSAGE_CHILDREN => cpu_split_ns(-1)?,
+            crate::header::sys_resource::RUSAGE_THREAD => cpu_split_ns(1)?,
             _ => return Err(Errno(EINVAL)),
         };
-        // SAFETY: every field of rusage is a number: zero is a value.
-        let mut usage: rusage = unsafe { mem::zeroed() };
-        usage.ru_utime = timeval {
+        let timeval_of = |ns: u64| timeval {
             tv_sec: (ns / 1_000_000_000) as _,
             tv_usec: (ns % 1_000_000_000 / 1_000) as _,
         };
+        // SAFETY: every field of rusage is a number: zero is a value.
+        let mut usage: rusage = unsafe { mem::zeroed() };
+        usage.ru_utime = timeval_of(user);
+        usage.ru_stime = timeval_of(system);
         r_usage.write(usage);
         Ok(())
     }

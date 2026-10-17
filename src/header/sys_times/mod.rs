@@ -20,17 +20,24 @@ const TICKS: i64 = 100;
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/times.html>.
 ///
 /// stafeto: the elapsed time on CLOCK_MONOTONIC in clock ticks; the CPU
-/// time of the process and of its children that were waited for, all of it
-/// user time.
+/// time of the process and of its children that were waited for, in user time
+/// and system time (the time in the kernel).
 #[unsafe(no_mangle)]
 pub extern "C" fn times(out: *mut tms) -> clock_t {
     if let Some(out) = unsafe { out.as_mut() } {
         let ticks = |ns: u64| (ns / (1_000_000_000 / TICKS as u64)) as clock_t;
+        let split = |who| {
+            crate::platform::sys::cpu_split_ns(who).map_or((0, 0), |(user, system)| {
+                (ticks(user), ticks(system))
+            })
+        };
+        let (utime, stime) = split(0);
+        let (cutime, cstime) = split(-1);
         *out = tms {
-            tms_utime: crate::platform::sys::cpu_ns(0).map_or(0, ticks),
-            tms_stime: 0,
-            tms_cutime: crate::platform::sys::cpu_ns(-1).map_or(0, ticks),
-            tms_cstime: 0,
+            tms_utime: utime,
+            tms_stime: stime,
+            tms_cutime: cutime,
+            tms_cstime: cstime,
         };
     }
     let mut now = crate::header::time::timespec::default();
