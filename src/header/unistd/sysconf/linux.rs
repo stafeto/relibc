@@ -183,7 +183,7 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
             {
                 return Some(-1);
             }
-            unsafe { limit.assume_init() }.rlim_cur.min(32) as c_long
+            unsafe { limit.assume_init() }.rlim_cur.min(64) as c_long
         }
         // The links of a path the file service follows.
         _SC_SYMLOOP_MAX => SYMLOOP_MAX,
