@@ -138,10 +138,12 @@ impl Tcb {
                 pthread: Pthread {
                     waitval: Waitval::new(),
                     flags: Default::default(),
+                    registered: core::sync::atomic::AtomicU32::new(0),
                     has_enabled_cancelation: AtomicBool::new(false),
                     has_queued_cancelation: AtomicBool::new(false),
                     stack_base: core::ptr::null_mut(),
                     stack_size: 0,
+                    stack_guard: 0,
                     os_tid: UnsafeCell::new(OsTid::default()),
                     tcb_selfref: UnsafeCell::new(tcb_ptr),
                 },

@@ -10,10 +10,7 @@ use crate::{
         },
         sched::{SCHED_FIFO, SCHED_OTHER, SCHED_RR, sched_param},
     },
-    platform::{
-        Pal, Sys,
-        types::{c_int, c_long, c_uchar, c_void, size_t},
-    },
+    platform::types::{c_int, c_long, c_uchar, c_void, size_t},
     pthread::{Pthread, PthreadFlags},
 };
 
@@ -30,7 +27,10 @@ impl Default for RlctAttr {
             schedpolicy: c_uchar::try_from(SCHED_OTHER).expect("constant value within bounds"),
             // TODO: Linux uses this one.
             scope: c_uchar::try_from(PTHREAD_SCOPE_SYSTEM).expect("constant value within bounds"),
-            guardsize: Sys::getpagesize(),
+            // One page, as everywhere: a stack that overflows faults. On
+            // stafeto the page is mapped and given back at once, so it
+            // costs no quota.
+            guardsize: <crate::platform::Sys as crate::platform::Pal>::getpagesize(),
             // TODO
             stack: 0,
             // stafeto commits a stack's pages when it maps them, from the
@@ -518,6 +518,7 @@ pub unsafe extern "C" fn pthread_getattr_np(thread: pthread_t, attr: *mut pthrea
     }
     attr.stack = thread.stack_base as usize;
     attr.stacksize = thread.stack_size;
+    attr.guardsize = thread.stack_guard;
     //TODO: more values?
     0
 }

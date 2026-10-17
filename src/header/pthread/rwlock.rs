@@ -17,7 +17,10 @@ pub unsafe extern "C" fn pthread_rwlock_init(
     unsafe {
         rwlock
             .cast::<RlctRwlock>()
-            .write(RlctRwlock::new(attr.pshared))
+            .write(RlctRwlock::with_kind(
+                attr.pshared,
+                c_int::from(attr.kind) == PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP,
+            ))
     };
 
     0
@@ -164,6 +167,40 @@ pub(crate) type RlctRwlock = crate::sync::rwlock::InnerRwLock;
 #[derive(Clone, Copy, Default)]
 pub(crate) struct RlctRwlockAttr {
     pshared: Pshared,
+    kind: u8,
+}
+
+/// GNU: readers first (the default), writers first (as the reader first
+/// kind, so that a thread may take a read lock it holds again), and writers
+/// first with no read lock taken again: a reader waits while a writer does.
+pub const PTHREAD_RWLOCK_PREFER_READER_NP: c_int = 0;
+pub const PTHREAD_RWLOCK_PREFER_WRITER_NP: c_int = 1;
+pub const PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP: c_int = 2;
+pub const PTHREAD_RWLOCK_DEFAULT_NP: c_int = 0;
+
+/// Non-POSIX, the GNU kind of a lock of the attributes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_rwlockattr_setkind_np(
+    attr: *mut pthread_rwlockattr_t,
+    kind: c_int,
+) -> c_int {
+    if !(PTHREAD_RWLOCK_PREFER_READER_NP..=PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP)
+        .contains(&kind)
+    {
+        return EINVAL;
+    }
+    unsafe { (*attr.cast::<RlctRwlockAttr>()).kind = kind as u8 };
+    0
+}
+
+/// Non-POSIX, the GNU kind of a lock of the attributes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_rwlockattr_getkind_np(
+    attr: *const pthread_rwlockattr_t,
+    kind: *mut c_int,
+) -> c_int {
+    unsafe { *kind = c_int::from((*attr.cast::<RlctRwlockAttr>()).kind) };
+    0
 }
 #[inline]
 unsafe fn get<'a>(ptr: *mut pthread_rwlock_t) -> &'a RlctRwlock {

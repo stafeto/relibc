@@ -28,6 +28,12 @@ impl Default for CondAttr {
     }
 }
 
+/// `cur` counts in steps of two; its lowest bit says the condition waits
+/// on CLOCK_MONOTONIC (`pthread_condattr_setclock`) when `timedwait` is
+/// given an absolute time, and CLOCK_REALTIME when it is clear (so that
+/// PTHREAD_COND_INITIALIZER, all zero, is the default).
+const MONOTONIC: u32 = 1;
+
 pub struct Cond {
     cur: AtomicUint,
     prev: AtomicUint,
@@ -48,10 +54,20 @@ impl Cond {
             prev: AtomicUint::new(0),
         }
     }
+    /// A condition whose `timedwait` takes a time of `clock`.
+    pub fn with_clock(clock: clockid_t) -> Self {
+        let cond = Self::new();
+        if clock == CLOCK_MONOTONIC {
+            cond.cur.store(MONOTONIC, Ordering::Relaxed);
+        }
+        cond
+    }
     fn wake(&self, count: i32) -> Result<(), Errno> {
         // This is formally correct as long as we don't have more than u32::MAX threads.
-        let prev = self.prev.load(Ordering::Relaxed);
-        self.cur.store(prev.wrapping_add(1), Ordering::Relaxed);
+        let prev = self.prev.load(Ordering::Relaxed) & !MONOTONIC;
+        let clock = self.cur.load(Ordering::Relaxed) & MONOTONIC;
+        self.cur
+            .store((prev | clock).wrapping_add(2), Ordering::Relaxed);
 
         crate::sync::futex_wake(&self.cur, count);
         Ok(())
@@ -79,8 +95,12 @@ impl Cond {
         self.wait_inner(mutex, Some(&relative))
     }
     pub fn timedwait(&self, mutex: &RlctMutex, timeout: &timespec) -> Result<(), Errno> {
-        // TODO: The clock can be other than CLOCK_REALTIME depends on CondAttr
-        self.clockwait(mutex, timeout, CLOCK_REALTIME)
+        let clock = if self.cur.load(Ordering::Relaxed) & MONOTONIC != 0 {
+            CLOCK_MONOTONIC
+        } else {
+            CLOCK_REALTIME
+        };
+        self.clockwait(mutex, timeout, clock)
     }
     fn wait_inner(&self, mutex: &RlctMutex, timeout: Option<&timespec>) -> Result<(), Errno> {
         self.wait_inner_generic(|| mutex.unlock(), || mutex.lock(), timeout)

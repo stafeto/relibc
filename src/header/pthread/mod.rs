@@ -141,6 +141,9 @@ pub extern "C" fn pthread_equal(pthread1: pthread_t, pthread2: pthread_t) -> c_i
     core::ptr::eq(pthread1, pthread2).into()
 }
 
+/// The most handlers of one kind pthread_atfork takes.
+const FORK_HOOKS_MAX: usize = 1024;
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_atfork.html>.
 #[unsafe(no_mangle)]
 pub extern "C" fn pthread_atfork(
@@ -149,6 +152,11 @@ pub extern "C" fn pthread_atfork(
     child: Option<extern "C" fn()>,
 ) -> c_int {
     let _hooks = FORK_HOOKS_LOCK.lock();
+    // The handlers at a time are limited (ENOMEM): a process has a few
+    // megabytes, and nothing takes a handler back.
+    if (0..3).any(|kind| unsafe { fork_hooks[kind].len() } >= FORK_HOOKS_MAX) {
+        return crate::header::errno::ENOMEM;
+    }
     if let Some(prepare) = prepare {
         unsafe {
             fork_hooks[0].push_back(prepare);

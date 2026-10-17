@@ -55,6 +55,7 @@ pub const POSIX_MADV_RANDOM: c_int = 1;
 pub const POSIX_MADV_SEQUENTIAL: c_int = 2;
 pub const POSIX_MADV_WILLNEED: c_int = 3;
 pub const POSIX_MADV_WONTNEED: c_int = 4;
+pub const POSIX_MADV_DONTNEED: c_int = 4;
 
 /// Non-POSIX, see <https://www.man7.org/linux/man-pages/man2/madvise.2.html>.
 #[unsafe(no_mangle)]
@@ -205,18 +206,41 @@ unsafe fn shm_path(name: *const c_char) -> CString {
     unsafe { CString::from_vec_unchecked(path) }
 }
 
+/// Whether `name` is a name of the objects of shared memory: after its
+/// leading slashes one component that is not empty, "." or "..".
+unsafe fn shm_name_ok(name: *const c_char) -> bool {
+    let bytes = unsafe { CStr::from_ptr(name) }.to_bytes();
+    let rest = &bytes[bytes.iter().take_while(|&&b| b == b'/').count()..];
+    !rest.is_empty() && rest != b"." && rest != b".."
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/shm_open.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shm_open(name: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
+    if !unsafe { shm_name_ok(name) } {
+        ERRNO.set(errno::EINVAL);
+        return -1;
+    }
     let path = unsafe { shm_path(name) };
-    unsafe { fcntl::open(path.as_ptr(), oflag, mode) }
+    // The descriptor is closed on exec (POSIX).
+    unsafe { fcntl::open(path.as_ptr(), oflag | fcntl::O_CLOEXEC, mode) }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/shm_unlink.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn shm_unlink(name: *const c_char) -> c_int {
+    if !unsafe { shm_name_ok(name) } {
+        ERRNO.set(errno::EINVAL);
+        return -1;
+    }
     let path = unsafe { shm_path(name) };
-    unsafe { unistd::unlink(path.as_ptr()) }
+    let status = unsafe { unistd::unlink(path.as_ptr()) };
+    // The directory of the objects has the sticky bit: a user that does not
+    // own the object is refused by EPERM, which this call says EACCES.
+    if status == -1 && ERRNO.get() == errno::EPERM {
+        ERRNO.set(errno::EACCES);
+    }
+    status
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sys_mman.h.html>.
