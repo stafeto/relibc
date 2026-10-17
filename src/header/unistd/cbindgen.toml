@@ -25,9 +25,7 @@ after_includes = """
 
 // stafeto implements a subprofile of POSIX.1-2024: the option macros below
 // name what passes acceptance, and sysconf (sysconf/linux.rs) answers the
-// same. Left out until their functions work: _POSIX_REALTIME_SIGNALS (the layer
-// has the signals 1 to 31 with one place for each, and refuses SIGRTMIN to
-// SIGRTMAX), _POSIX_SHARED_MEMORY_OBJECTS
+// same. Left out until their functions work: _POSIX_SHARED_MEMORY_OBJECTS
 // (MAP_SHARED), and the XSI option (_XOPEN_UNIX, _XOPEN_VERSION, _XOPEN_SHM).
 #define _POSIX_SUBPROFILE 1
 #define _POSIX_VERSION 202405L
@@ -37,9 +35,14 @@ after_includes = """
 #define _POSIX_MESSAGE_PASSING 202405L
 #define _POSIX_MONOTONIC_CLOCK 202405L
 #define _POSIX_PRIORITY_SCHEDULING 202405L
+#define _POSIX_REALTIME_SIGNALS 202405L
+#define _POSIX_CPUTIME 202405L
+#define _POSIX_THREAD_CPUTIME 202405L
 #define _POSIX_SEMAPHORES 202405L
 #define _POSIX_SHELL 1
 #define _POSIX_SPAWN 202405L
+#define _POSIX_SPORADIC_SERVER -1
+#define _POSIX_THREAD_SPORADIC_SERVER -1
 #define _POSIX_JOB_CONTROL 1
 #define _POSIX_SAVED_IDS 1
 #define _POSIX_THREADS 202405L

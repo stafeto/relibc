@@ -1025,8 +1025,23 @@ impl Pal for Sys {
         unsafe { stafeto_thread_id() }
     }
 
-    fn gettimeofday(tp: Out<timeval>, tzp: Option<Out<timezone>>) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn gettimeofday(mut tp: Out<timeval>, tzp: Option<Out<timezone>>) -> Result<()> {
+        let mut now = timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        ret(unsafe { stafeto_clock_gettime(0, &raw mut now) } as isize)?;
+        tp.write(timeval {
+            tv_sec: now.tv_sec,
+            tv_usec: (now.tv_nsec / 1000) as _,
+        });
+        if let Some(mut tz) = tzp {
+            tz.write(timezone {
+                tz_minuteswest: 0,
+                tz_dsttime: 0,
+            });
+        }
+        Ok(())
     }
 
     fn getuid() -> uid_t {
