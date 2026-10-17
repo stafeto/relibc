@@ -136,7 +136,10 @@ pub const _CS_POSIX_V7_LPBIG_OFFBIG_LINTFLAGS: c_int = 1147;
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fork.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _Fork() -> pid_t {
-    unsafe { Sys::fork() }.or_minus_one_errno()
+    let pid = unsafe { Sys::fork() }.or_minus_one_errno();
+    #[cfg(stafeto)]
+    crate::platform::sys::fork_done();
+    pid
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/_Exit.html>.
@@ -499,6 +502,9 @@ pub unsafe extern "C" fn fork() -> pid_t {
         ERRNO.set(errno);
     }
     unsafe { crate::header::pthread::FORK_HOOKS_LOCK.manual_unlock() };
+    // The signals that came while fork held its locks are delivered now.
+    #[cfg(stafeto)]
+    crate::platform::sys::fork_done();
     pid
 }
 

@@ -7,6 +7,14 @@
 //! used. The identifier of such a timer is the address of its object with
 //! bit 62 set; the identifiers of the clock service are small numbers. A
 //! child of `fork` does not have the timer (timers are not inherited).
+//!
+//! The timers on a CPU-time clock (of the process, of a thread) are kept
+//! here as well, with any notice (a signal, a function, none): the service
+//! cannot tell when a process has used some processor time. The helper
+//! looks at the clock, and sleeps by the fourth of the time that is left
+//! (at least a millisecond), since the time of a clock cannot pass faster
+//! than that. `setitimer` on ITIMER_VIRTUAL and ITIMER_PROF is such a
+//! timer on the clock of the process, which sends SIGVTALRM or SIGPROF.
 
 use alloc::boxed::Box;
 use core::{
@@ -20,15 +28,23 @@ use crate::{
     header::{
         aio,
         bits_sigset_t::sigset_t,
-        errno::EINVAL,
-        pthread::{pthread_create, pthread_detach},
-        signal::{SIG_BLOCK, pthread_sigmask, sigevent, sigfillset},
-        time::{CLOCK_MONOTONIC, CLOCK_REALTIME, TIMER_ABSTIME, itimerspec, timespec},
+        errno::{EINVAL, EPERM},
+        pthread::{
+            PTHREAD_EXPLICIT_SCHED, pthread_attr_destroy, pthread_attr_init,
+            pthread_attr_setinheritsched, pthread_attr_setschedparam, pthread_attr_setschedpolicy,
+            pthread_create, pthread_detach, pthread_getcpuclockid, pthread_self,
+        },
+        sched::{SCHED_FIFO, sched_param},
+        signal::{SIG_BLOCK, SIGEV_SIGNAL, SIGEV_THREAD, pthread_sigmask, sigevent, sigfillset},
+        time::{
+            CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_REALTIME, CLOCK_THREAD_CPUTIME_ID,
+            TIMER_ABSTIME, itimerspec, timespec,
+        },
     },
     out::Out,
     platform::{
         Pal, Sys,
-        types::{c_int, c_void, clockid_t, pthread_t, timer_t},
+        types::{c_int, c_void, clockid_t, pthread_attr_t, pthread_t, timer_t},
     },
     sync::{Mutex, futex_wait, futex_wake},
 };
@@ -49,6 +65,8 @@ struct Inner {
 
 struct Timer {
     clock: clockid_t,
+    /// The clock is a CPU-time clock: `next` is in its nanoseconds.
+    cpu: bool,
     event: sigevent,
     inner: Mutex<Inner>,
     /// Counts the changes the helper must look at.
@@ -58,6 +76,14 @@ struct Timer {
 
 unsafe impl Send for Timer {}
 unsafe impl Sync for Timer {}
+
+/// Whether `clock` is a CPU-time clock: of the process (2), of the calling
+/// thread (3), or of a thread (low bits 6).
+pub fn is_cpu(clock: clockid_t) -> bool {
+    clock == CLOCK_PROCESS_CPUTIME_ID
+        || clock == CLOCK_THREAD_CPUTIME_ID
+        || (clock > 0 && clock & 7 == 6)
+}
 
 fn now(clock: clockid_t) -> u64 {
     let mut at = MaybeUninit::<timespec>::uninit();
@@ -122,7 +148,7 @@ extern "C" fn helper(arg: *mut c_void) -> *mut c_void {
             if !inner.armed {
                 (seen, None)
             } else {
-                let at = now(CLOCK_MONOTONIC);
+                let at = now(if timer.cpu { timer.clock } else { CLOCK_MONOTONIC });
                 if at >= inner.next {
                     if inner.interval > 0 {
                         let missed = (at - inner.next) / inner.interval;
@@ -136,7 +162,15 @@ extern "C" fn helper(arg: *mut c_void) -> *mut c_void {
                     unsafe { aio::notify_event(&timer.event) };
                     continue;
                 }
-                (seen, Some(inner.next))
+                if timer.cpu {
+                    // Its time cannot pass faster than the time of the
+                    // monotonic clock: look again after a part of the time
+                    // that is left.
+                    let left = inner.next - at;
+                    (seen, Some(now(CLOCK_MONOTONIC) + (left / 4).max(1_000_000)))
+                } else {
+                    (seen, Some(inner.next))
+                }
             }
         };
         let deadline = until.map(to_timespec);
@@ -146,13 +180,30 @@ extern "C" fn helper(arg: *mut c_void) -> *mut c_void {
 
 /// A timer on `clock` that gives its notice as `event` (SIGEV_THREAD) asks.
 pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
-    if (clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC)
-        || event.sigev_notify_function.is_none()
+    let cpu = is_cpu(clock);
+    if !cpu
+        && ((clock != CLOCK_REALTIME && clock != CLOCK_MONOTONIC)
+            || event.sigev_notify_function.is_none())
     {
         return Err(Errno(EINVAL));
     }
+    if cpu && event.sigev_notify == SIGEV_THREAD && event.sigev_notify_function.is_none() {
+        return Err(Errno(EINVAL));
+    }
+    // The clock of "the calling thread" is the one of the thread that
+    // makes the timer, not of the helper that reads it.
+    let clock = if clock == CLOCK_THREAD_CPUTIME_ID {
+        let mut own: clockid_t = 0;
+        if unsafe { pthread_getcpuclockid(pthread_self(), &mut own) } != 0 {
+            return Err(Errno(EINVAL));
+        }
+        own
+    } else {
+        clock
+    };
     let timer = Box::into_raw(Box::new(Timer {
         clock,
+        cpu,
         event: event.clone(),
         inner: Mutex::new(Inner {
             armed: false,
@@ -163,23 +214,56 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
         epoch: AtomicU32::new(0),
         gone: AtomicBool::new(false),
     }));
+    let id = (timer as usize | TAG) as timer_t;
+    // A signal with the number of the timer as its value (the default
+    // notice) is a plain signal here.
+    if unsafe { (*timer).event.sigev_notify } & 0xFF == SIGEV_SIGNAL {
+        unsafe {
+            if (*timer).event.sigev_notify & 0x100 != 0 {
+                (*timer).event.sigev_value.sival_ptr = id.cast();
+            }
+            (*timer).event.sigev_notify = SIGEV_SIGNAL;
+        }
+    }
     let mut thread = MaybeUninit::<pthread_t>::uninit();
-    let made = unsafe { pthread_create(thread.as_mut_ptr(), ptr::null(), helper, timer.cast()) };
+    // A timer on processor time must fire while threads of a real-time policy
+    // keep the processor, so its helper runs at the highest priority when the
+    // caller may give it that (the superuser), else as the caller does.
+    let mut made = EPERM;
+    if cpu {
+        let mut attr = MaybeUninit::<pthread_attr_t>::uninit();
+        unsafe {
+            if pthread_attr_init(attr.as_mut_ptr()) == 0 {
+                let param = sched_param { sched_priority: 32 };
+                if pthread_attr_setinheritsched(attr.as_mut_ptr(), PTHREAD_EXPLICIT_SCHED) == 0
+                    && pthread_attr_setschedpolicy(attr.as_mut_ptr(), SCHED_FIFO) == 0
+                    && pthread_attr_setschedparam(attr.as_mut_ptr(), &param) == 0
+                {
+                    made = pthread_create(thread.as_mut_ptr(), attr.as_ptr(), helper, timer.cast());
+                }
+                pthread_attr_destroy(attr.as_mut_ptr());
+            }
+        }
+    }
+    if made != 0 {
+        made = unsafe { pthread_create(thread.as_mut_ptr(), ptr::null(), helper, timer.cast()) };
+    }
     if made != 0 {
         drop(unsafe { Box::from_raw(timer) });
         return Err(Errno(crate::header::errno::EAGAIN));
     }
     unsafe { pthread_detach(thread.assume_init()) };
-    Ok((timer as usize | TAG) as timer_t)
+    Ok(id)
 }
 
 fn remaining(timer: &Timer, inner: &Inner) -> itimerspec {
     let left = if inner.armed {
-        inner.next.saturating_sub(now(CLOCK_MONOTONIC))
+        inner
+            .next
+            .saturating_sub(now(if timer.cpu { timer.clock } else { CLOCK_MONOTONIC }))
     } else {
         0
     };
-    let _ = timer;
     itimerspec {
         it_interval: to_timespec(inner.interval),
         it_value: to_timespec(left),
@@ -218,14 +302,14 @@ pub fn settime(id: timer_t, flags: c_int, value: &itimerspec) -> Option<Result<i
     }
     let mut inner = timer.inner.lock();
     let old = remaining(timer, &inner);
-    let mono = now(CLOCK_MONOTONIC);
+    let mono = now(if timer.cpu { timer.clock } else { CLOCK_MONOTONIC });
     if value.it_value.tv_sec == 0 && value.it_value.tv_nsec == 0 {
         inner.armed = false;
     } else {
         let given = to_ns(&value.it_value);
         inner.next = if flags & TIMER_ABSTIME == 0 {
             mono.saturating_add(given)
-        } else if timer.clock == CLOCK_MONOTONIC {
+        } else if timer.clock == CLOCK_MONOTONIC || timer.cpu {
             given
         } else {
             // The time of the realtime clock is turned into the monotonic
@@ -239,4 +323,50 @@ pub fn settime(id: timer_t, flags: c_int, value: &itimerspec) -> Option<Result<i
     drop(inner);
     changed(timer);
     Some(Ok(old))
+}
+
+/// The interval timers on processor time, ITIMER_VIRTUAL (1) and ITIMER_PROF
+/// (2): one timer of this module for each, of the process that made it.
+static ITIMERS: Mutex<[(c_int, usize); 2]> = Mutex::new([(0, 0); 2]);
+
+/// Sets (`set`) or reads ITIMER_VIRTUAL or ITIMER_PROF (`which` 1 or 2): the
+/// setting before, the time left and the interval in nanoseconds. The
+/// timer sends SIGVTALRM or SIGPROF to the process when `value_ns` of the
+/// time its threads ran have passed, and then every `interval_ns`.
+pub fn interval_timer(which: c_int, set: bool, value_ns: u64, interval_ns: u64) -> Result<[u64; 2], Errno> {
+    use crate::header::unistd::getpid;
+    let index = which as usize - 1;
+    let me = getpid();
+    let mut table = ITIMERS.lock();
+    let (owner, address) = table[index];
+    // A child of fork has none of the helper threads.
+    let existing = (owner == me && address != 0).then_some(address);
+    let timer = match existing {
+        Some(address) => address as *const Timer,
+        None if !set => return Ok([0, 0]),
+        None if value_ns == 0 => return Ok([0, 0]),
+        None => {
+            let mut event = unsafe { core::mem::zeroed::<sigevent>() };
+            event.sigev_notify = SIGEV_SIGNAL;
+            event.sigev_signo = if which == 1 { 26 } else { 27 };
+            let id = create(CLOCK_PROCESS_CPUTIME_ID, &event)? as usize;
+            table[index] = (me, id & !TAG);
+            (id & !TAG) as *const Timer
+        }
+    };
+    drop(table);
+    let timer = unsafe { &*timer };
+    let before = {
+        let inner = timer.inner.lock();
+        remaining(timer, &inner)
+    };
+    if set {
+        let value = itimerspec {
+            it_interval: to_timespec(interval_ns),
+            it_value: to_timespec(value_ns),
+        };
+        let id = (timer as *const Timer as usize | TAG) as timer_t;
+        settime(id, 0, &value);
+    }
+    Ok([to_ns(&before.it_value), to_ns(&before.it_interval)])
 }

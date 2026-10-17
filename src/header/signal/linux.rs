@@ -44,7 +44,7 @@ pub const SIGIOT: usize = super::constants::SIGABRT;
 ///
 /// Pollable event.
 /// Default action: T
-pub const SIGPOLL: usize = super::constants::SIGIO;
+pub const SIGPOLL: usize = 29;
 /// Non-POSIX, see <https://www.man7.org/linux/man-pages/man7/signal.7.html>.
 ///
 /// Synonymous with `SIGSYS`.

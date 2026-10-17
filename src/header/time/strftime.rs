@@ -10,7 +10,7 @@ use crate::{
     casting::{CCharPtrToU8, U8PtrToCCharPtr},
     platform::{
         self, WriteByte,
-        types::{c_char, c_int, size_t},
+        types::{c_char, size_t},
     },
 };
 
@@ -140,13 +140,14 @@ pub unsafe fn strftime<W: WriteByte>(w: &mut W, format: *const c_char, t: *const
                 }
 
                 // Century: %C
-                b'C' => {
-                    let mut year = unsafe { (*t).tm_year } / 100;
-                    if unsafe { (*t).tm_year } % 100 != 0 {
-                        year += 1;
-                    }
-                    w!("{:02}", year + 19);
-                }
+                b'C' => w!("{:02}", (i64::from(unsafe { (*t).tm_year }) + 1900).div_euclid(100)),
+
+                // Date and time of the C locale: %c => %a %b %e %H:%M:%S %Y
+                b'c' => w!(recurse "%a %b %e %H:%M:%S %Y"),
+
+                // ISO 8601 year of the week: %G, and its last two digits: %g
+                b'G' => w!("{}", iso_week(unsafe { &*t }).1),
+                b'g' => w!("{:02}", iso_week(unsafe { &*t }).1.rem_euclid(100)),
 
                 // Day of month: %d
                 b'd' => w!("{:02}", unsafe { (*t).tm_mday }),
@@ -217,19 +218,19 @@ pub unsafe fn strftime<W: WriteByte>(w: &mut W, format: *const c_char, t: *const
 
                 // Sunday-based week of year: %U
                 b'U' => w!(
-                    "{}",
+                    "{:02}",
                     (unsafe { (*t).tm_yday } + 7 - unsafe { (*t).tm_wday }) / 7
                 ),
 
                 // ISO-8601 week of year
-                b'V' => w!("{}", week_of_year(unsafe { &*t })),
+                b'V' => w!("{:02}", iso_week(unsafe { &*t }).0),
 
                 // Weekday (0-6, Sunday=0): %w
                 b'w' => w!("{}", unsafe { (*t).tm_wday }),
 
                 // Monday-based week of year: %W
                 b'W' => w!(
-                    "{}",
+                    "{:02}",
                     (unsafe { (*t).tm_yday } + 7 - (unsafe { (*t).tm_wday } + 6) % 7) / 7
                 ),
 
@@ -286,28 +287,37 @@ pub unsafe fn strftime<W: WriteByte>(w: &mut W, format: *const c_char, t: *const
     cw.written
 }
 
-/// Calculate number of weeks in a year as defined by ISO 8601
-///
-/// ## Source
-/// https://en.wikipedia.org/wiki/ISO_week_date
-fn weeks_per_year(year: c_int) -> c_int {
-    let year = f64::from(year);
-    let p_y = (year + (year / 4.) - (year / 100.) + (year / 400.)) as c_int % 7;
-    if p_y == 4 { 53 } else { 52 }
+/// The weekday of the last day of `year` (0 Sunday) counted the way ISO 8601
+/// tells long years apart: a year of 53 weeks ends on a Thursday, or begins
+/// on a Thursday of a leap year, which is the same as the year before it
+/// ending on a Wednesday.
+fn iso_p(year: i64) -> i64 {
+    (year + year.div_euclid(4) - year.div_euclid(100) + year.div_euclid(400)).rem_euclid(7)
 }
 
-/// Calculate the week of the year accounting for leap weeks (ISO 8601)
+/// The number of weeks of the ISO 8601 year `year`: 52 or 53.
+fn weeks_in_year(year: i64) -> i64 {
+    if iso_p(year) == 4 || iso_p(year - 1) == 3 {
+        53
+    } else {
+        52
+    }
+}
+
+/// The ISO 8601 week (1 to 53) and the year it belongs to.
 ///
 /// ## Source
 /// https://en.wikipedia.org/wiki/ISO_week_date
-fn week_of_year(time: &tm) -> c_int {
-    let week = (10 + time.tm_yday - time.tm_wday) / 7;
-
-    if week <= 1 {
-        weeks_per_year(time.tm_year - 1)
-    } else if week > weeks_per_year(time.tm_year) {
-        1
+fn iso_week(time: &tm) -> (i64, i64) {
+    let year = i64::from(time.tm_year) + 1900;
+    // Monday is 1 and Sunday is 7.
+    let weekday = if time.tm_wday == 0 { 7 } else { i64::from(time.tm_wday) };
+    let week = (i64::from(time.tm_yday) + 1 - weekday + 10) / 7;
+    if week < 1 {
+        (weeks_in_year(year - 1), year - 1)
+    } else if week > weeks_in_year(year) {
+        (1, year + 1)
     } else {
-        week
+        (week, year)
     }
 }
