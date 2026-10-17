@@ -2,23 +2,40 @@
 //!
 //! See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/aio.h.html>.
 //!
-//! A request is carried out in the call that makes it, so it is complete
-//! when the call returns: `aio_error` never answers EINPROGRESS and
-//! `aio_cancel` finds every request done.
+//! A request joins the queue of its descriptor and a thread of the library
+//! carries the queue's requests out in order, one at a time; the thread ends
+//! with the queue. A request that has not begun can be cancelled. The end of
+//! a request is published in the control block (`aio_error`, `aio_return`),
+//! wakes `aio_suspend` and `lio_listio` and then notifies as the request's
+//! `sigevent` asks. The queues are not inherited by a child of `fork`.
+
+use alloc::{boxed::Box, collections::VecDeque, vec::Vec};
+use core::{
+    mem::MaybeUninit,
+    ptr,
+    sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering},
+};
 
 use crate::{
+    error::Errno,
     header::{
-        errno::{EAGAIN, EBADF, EINVAL, EIO},
-        fcntl::{F_GETFL, fcntl},
+        bits_sigset_t::sigset_t,
+        errno::{EAGAIN, EBADF, ECANCELED, EINPROGRESS, EINTR, EINVAL, EIO, ESPIPE, ETIMEDOUT},
+        fcntl::{F_GETFL, O_APPEND, O_DSYNC, O_SYNC, fcntl},
         pthread::{pthread_create, pthread_detach},
-        signal::{SIGEV_SIGNAL, SIGEV_THREAD, sigevent, sigqueue, sigval},
-        time::timespec,
-        unistd::{fdatasync, fsync, getpid, pread, pwrite},
+        signal::{
+            SIG_BLOCK, SIGEV_SIGNAL, SIGEV_THREAD, pthread_sigmask, sigevent, sigfillset, sigqueue,
+            sigval,
+        },
+        time::{CLOCK_MONOTONIC, timespec},
+        unistd::{fdatasync, fsync, getpid, pread, pwrite, read, write},
     },
+    out::Out,
     platform::{
-        self,
-        types::{c_int, c_void, off_t, pthread_t, size_t, ssize_t},
+        self, Pal, Sys,
+        types::{c_int, c_void, off_t, pid_t, pthread_t, size_t, ssize_t},
     },
+    sync::{Mutex, futex_wake},
 };
 
 pub const AIO_CANCELED: c_int = 0;
@@ -48,9 +65,93 @@ pub struct aiocb {
     __return: ssize_t,
 }
 
+// The state word of a control block (`__error`): zero for a block that no
+// request was made with, then the request in progress, the request that
+// ended (3 and the error number), and its end taken by `aio_return`.
+const NEW: c_int = 0;
+const RUNNING: c_int = 1;
+const TAKEN: c_int = 2;
+const ENDED: c_int = 3;
+
+/// The requests that wait or run at most ({AIO_MAX}).
+pub const AIO_MAX: c_int = 128;
+
+/// What a queued request does.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Read,
+    Write,
+    /// `aio_fsync` with O_SYNC.
+    Sync,
+    /// `aio_fsync` with O_DSYNC.
+    DataSync,
+}
+
+/// The end of a `lio_listio` list that was started with LIO_NOWAIT and a
+/// `sigevent`: the last request to end notifies. `left` counts the requests
+/// that have not ended, and one for the call itself while it is queueing.
+struct Group {
+    left: AtomicUsize,
+    event: sigevent,
+}
+
+#[derive(Clone, Copy)]
+struct Job {
+    cb: *mut aiocb,
+    kind: Kind,
+    group: *mut Group,
+}
+
+/// The requests of one descriptor, in order, and the thread that carries
+/// them out.
+struct Lane {
+    fd: c_int,
+    jobs: VecDeque<Job>,
+    /// A request of the lane has begun and has not ended.
+    running: bool,
+}
+
+struct State {
+    lanes: Vec<Lane>,
+    /// The process the lanes belong to: a child of `fork` has none of the
+    /// threads.
+    owner: pid_t,
+}
+
+// The pointers are the callers' control blocks, which they keep until the
+// request ends.
+unsafe impl Send for State {}
+
+static STATE: Mutex<State> = Mutex::new(State {
+    lanes: Vec::new(),
+    owner: 0,
+});
+
+/// Whether the request has ended (a block that was never used has not).
+fn ended(cb: *const aiocb) -> bool {
+    state_of(cb).load(Ordering::Acquire) >= ENDED
+}
+
+/// Counts the ends of requests: a waiter sleeps while it is unchanged.
+static EPOCH: AtomicU32 = AtomicU32::new(0);
+
+fn lock() -> crate::sync::MutexGuard<'static, State> {
+    let mut state = STATE.lock();
+    let me = getpid();
+    if state.owner != me {
+        state.lanes.clear();
+        state.owner = me;
+    }
+    state
+}
+
+fn state_of(cb: *const aiocb) -> &'static AtomicI32 {
+    unsafe { AtomicI32::from_ptr(ptr::addr_of!((*cb).__error).cast_mut()) }
+}
+
 /// Tells of the end as a sigevent asks: a signal to the process, or the
 /// function of SIGEV_THREAD run in a thread of its own.
-unsafe fn notify_event(event: &sigevent) {
+pub(crate) unsafe fn notify_event(event: &sigevent) {
     if event.sigev_notify == SIGEV_SIGNAL && event.sigev_signo != 0 {
         sigqueue(getpid(), event.sigev_signo, event.sigev_value);
     }
@@ -59,15 +160,12 @@ unsafe fn notify_event(event: &sigevent) {
         && let Some(function) = event.sigev_notify_function
     {
         extern "C" fn run(arg: *mut c_void) -> *mut c_void {
-            let call = unsafe {
-                alloc::boxed::Box::from_raw(arg.cast::<(extern "C" fn(sigval), sigval)>())
-            };
+            let call = unsafe { Box::from_raw(arg.cast::<(extern "C" fn(sigval), sigval)>()) };
             (call.0)(call.1);
-            core::ptr::null_mut()
+            ptr::null_mut()
         }
-        let call =
-            alloc::boxed::Box::into_raw(alloc::boxed::Box::new((function, event.sigev_value)));
-        let mut thread = core::mem::MaybeUninit::<pthread_t>::uninit();
+        let call = Box::into_raw(Box::new((function, event.sigev_value)));
+        let mut thread = MaybeUninit::<pthread_t>::uninit();
         let made = unsafe {
             pthread_create(
                 thread.as_mut_ptr(),
@@ -79,29 +177,62 @@ unsafe fn notify_event(event: &sigevent) {
         if made == 0 {
             unsafe { pthread_detach(thread.assume_init()) };
         } else {
-            drop(unsafe { alloc::boxed::Box::from_raw(call) });
+            drop(unsafe { Box::from_raw(call) });
         }
     }
 }
 
-unsafe fn notify(aiocbp: *mut aiocb) {
-    unsafe { notify_event(&(*aiocbp).aio_sigevent) };
+/// Publishes the end of a request: the value, then the error, which tells a
+/// reader that the value is there; then the waiters are woken.
+unsafe fn publish(cb: *mut aiocb, error: c_int, value: ssize_t) {
+    unsafe { ptr::addr_of_mut!((*cb).__return).write_volatile(value) };
+    state_of(cb).store(ENDED + error, Ordering::Release);
+    EPOCH.fetch_add(1, Ordering::SeqCst);
+    futex_wake(&EPOCH, i32::MAX);
 }
 
-/// Carries the request out; `operation` is LIO_READ or LIO_WRITE.
-unsafe fn perform(aiocbp: *mut aiocb, operation: c_int) -> c_int {
-    let request = unsafe { &mut *aiocbp };
-    if unsafe { fcntl(request.aio_fildes, F_GETFL, 0) } < 0 {
-        platform::ERRNO.set(EBADF);
-        return -1;
+/// The request `job` has ended with `error` and `value`: published, then
+/// told as its `sigevent` and the end of its list ask. The control block is
+/// not touched after it is published (the caller may free it), so the
+/// notification is copied first.
+unsafe fn finish(job: Job, error: c_int, value: ssize_t) {
+    let event = unsafe { (*job.cb).aio_sigevent.clone() };
+    unsafe { publish(job.cb, error, value) };
+    unsafe { notify_event(&event) };
+    unsafe { group_done(job.group) };
+}
+
+unsafe fn group_done(group: *mut Group) {
+    if group.is_null() {
+        return;
     }
-    if request.aio_offset < 0 || request.aio_reqprio < 0 {
-        platform::ERRNO.set(EINVAL);
-        return -1;
+    if unsafe { (*group).left.fetch_sub(1, Ordering::AcqRel) } == 1 {
+        let group = unsafe { Box::from_raw(group) };
+        unsafe { notify_event(&group.event) };
     }
+}
+
+fn block_signals() {
+    let mut set = MaybeUninit::<sigset_t>::uninit();
+    unsafe {
+        sigfillset(set.as_mut_ptr());
+        pthread_sigmask(SIG_BLOCK, set.as_ptr(), ptr::null_mut());
+    }
+}
+
+/// Carries a read or a write out; the position is the request's, and a file
+/// that has none (a pipe, a terminal) is read or written where it is.
+unsafe fn transfer(cb: *mut aiocb, kind: Kind) -> (c_int, ssize_t) {
+    let request = unsafe { &*cb };
     platform::ERRNO.set(0);
-    let done = unsafe {
-        if operation == LIO_READ {
+    // A file opened for appending gets the data at its end, wherever the
+    // request's offset points.
+    let append =
+        kind == Kind::Write && unsafe { fcntl(request.aio_fildes, F_GETFL, 0) } & O_APPEND != 0;
+    let mut done = unsafe {
+        if append {
+            write(request.aio_fildes, request.aio_buf, request.aio_nbytes)
+        } else if kind == Kind::Read {
             pread(
                 request.aio_fildes,
                 request.aio_buf,
@@ -117,15 +248,131 @@ unsafe fn perform(aiocbp: *mut aiocb, operation: c_int) -> c_int {
             )
         }
     };
-    if done < 0 {
-        request.__error = platform::ERRNO.get();
-        request.__return = -1;
-    } else {
-        request.__error = 0;
-        request.__return = done;
+    if done < 0 && platform::ERRNO.get() == ESPIPE {
+        done = unsafe {
+            if kind == Kind::Read {
+                read(request.aio_fildes, request.aio_buf, request.aio_nbytes)
+            } else {
+                write(request.aio_fildes, request.aio_buf, request.aio_nbytes)
+            }
+        };
     }
-    unsafe { notify(aiocbp) };
-    0
+    if done < 0 {
+        (platform::ERRNO.get(), -1)
+    } else {
+        (0, done)
+    }
+}
+
+unsafe fn carry_out(job: Job) {
+    let (error, value) = match job.kind {
+        Kind::Read | Kind::Write => unsafe { transfer(job.cb, job.kind) },
+        Kind::Sync | Kind::DataSync => {
+            let fd = unsafe { (*job.cb).aio_fildes };
+            let flushed = if job.kind == Kind::Sync {
+                fsync(fd)
+            } else {
+                fdatasync(fd)
+            };
+            if flushed < 0 {
+                (platform::ERRNO.get(), -1)
+            } else {
+                (0, 0)
+            }
+        }
+    };
+    unsafe { finish(job, error, value) };
+}
+
+/// The thread of a lane: its requests in order, and the end of the lane
+/// when none is left.
+extern "C" fn worker(arg: *mut c_void) -> *mut c_void {
+    block_signals();
+    let fd = arg as usize as c_int;
+    loop {
+        let job = {
+            let mut state = lock();
+            let Some(at) = state.lanes.iter().position(|l| l.fd == fd) else {
+                return ptr::null_mut();
+            };
+            match state.lanes[at].jobs.pop_front() {
+                Some(job) => {
+                    state.lanes[at].running = true;
+                    job
+                }
+                None => {
+                    state.lanes.swap_remove(at);
+                    return ptr::null_mut();
+                }
+            }
+        };
+        unsafe { carry_out(job) };
+        let mut state = lock();
+        if let Some(lane) = state.lanes.iter_mut().find(|l| l.fd == fd) {
+            lane.running = false;
+        }
+    }
+}
+
+/// Queues a request whose descriptor is checked; the error number if not.
+unsafe fn submit(cb: *mut aiocb, kind: Kind, group: *mut Group) -> Result<(), c_int> {
+    let request = unsafe { &mut *cb };
+    // A descriptor that is no good (or not open for the operation) is the
+    // error of the request, which the transfer finds, and not of this call.
+    if kind == Kind::Read || kind == Kind::Write {
+        if request.aio_offset < 0 || request.aio_reqprio < 0 {
+            return Err(EINVAL);
+        }
+        if request.aio_nbytes > isize::MAX as size_t {
+            return Err(EINVAL);
+        }
+    }
+    request.__return = -1;
+    state_of(cb).store(RUNNING, Ordering::Release);
+    let fd = request.aio_fildes;
+    let mut state = lock();
+    let outstanding: usize = state
+        .lanes
+        .iter()
+        .map(|l| l.jobs.len() + usize::from(l.running))
+        .sum();
+    if outstanding >= AIO_MAX as usize {
+        state_of(cb).store(NEW, Ordering::Release);
+        return Err(EAGAIN);
+    }
+    let job = Job { cb, kind, group };
+    if let Some(lane) = state.lanes.iter_mut().find(|l| l.fd == fd) {
+        lane.jobs.push_back(job);
+        return Ok(());
+    }
+    let mut jobs = VecDeque::new();
+    jobs.push_back(job);
+    state.lanes.push(Lane {
+        fd,
+        jobs,
+        running: false,
+    });
+    let mut thread = MaybeUninit::<pthread_t>::uninit();
+    let made = unsafe {
+        pthread_create(
+            thread.as_mut_ptr(),
+            ptr::null(),
+            worker,
+            fd as usize as *mut c_void,
+        )
+    };
+    if made != 0 {
+        state.lanes.pop();
+        state_of(cb).store(NEW, Ordering::Release);
+        return Err(EAGAIN);
+    }
+    unsafe { pthread_detach(thread.assume_init()) };
+    Ok(())
+}
+
+fn fail(errno: c_int) -> c_int {
+    platform::ERRNO.set(errno);
+    -1
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_read.html>.
@@ -134,7 +381,10 @@ unsafe fn perform(aiocbp: *mut aiocb, operation: c_int) -> c_int {
 /// `aiocbp` points to a request.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn aio_read(aiocbp: *mut aiocb) -> c_int {
-    unsafe { perform(aiocbp, LIO_READ) }
+    match unsafe { submit(aiocbp, Kind::Read, ptr::null_mut()) } {
+        Ok(()) => 0,
+        Err(errno) => fail(errno),
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_write.html>.
@@ -143,7 +393,40 @@ pub unsafe extern "C" fn aio_read(aiocbp: *mut aiocb) -> c_int {
 /// `aiocbp` points to a request.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn aio_write(aiocbp: *mut aiocb) -> c_int {
-    unsafe { perform(aiocbp, LIO_WRITE) }
+    match unsafe { submit(aiocbp, Kind::Write, ptr::null_mut()) } {
+        Ok(()) => 0,
+        Err(errno) => fail(errno),
+    }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_fsync.html>.
+///
+/// # Safety
+/// `aiocbp` points to a request.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn aio_fsync(operation: c_int, aiocbp: *mut aiocb) -> c_int {
+    let kind = match operation {
+        o if o == O_SYNC => Kind::Sync,
+        o if o == O_DSYNC => Kind::DataSync,
+        _ => return fail(EINVAL),
+    };
+    if unsafe { fcntl((*aiocbp).aio_fildes, F_GETFL, 0) } < 0 {
+        return fail(EBADF);
+    }
+    match unsafe { submit(aiocbp, kind, ptr::null_mut()) } {
+        Ok(()) => 0,
+        Err(errno) => fail(errno),
+    }
+}
+
+/// Sleeps until the count of ends is no longer `seen`, the `deadline`
+/// (CLOCK_MONOTONIC) passes or a signal comes: 0, ETIMEDOUT or EINTR.
+fn sleep_until_change(seen: u32, deadline: Option<&timespec>) -> c_int {
+    match unsafe { Sys::futex_wait(ptr::from_ref(&EPOCH).cast_mut().cast(), seen, deadline) } {
+        Err(Errno(EINTR)) => EINTR,
+        Err(Errno(ETIMEDOUT)) if deadline.is_some() => ETIMEDOUT,
+        _ => 0,
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/lio_listio.html>.
@@ -158,57 +441,125 @@ pub unsafe extern "C" fn lio_listio(
     sig: *mut sigevent,
 ) -> c_int {
     if (mode != LIO_WAIT && mode != LIO_NOWAIT) || nent < 0 {
-        platform::ERRNO.set(EINVAL);
-        return -1;
+        return fail(EINVAL);
     }
+    if nent > AIO_MAX {
+        return fail(EAGAIN);
+    }
+    let group = if mode == LIO_NOWAIT && !sig.is_null() {
+        Box::into_raw(Box::new(Group {
+            left: AtomicUsize::new(1),
+            event: unsafe { (*sig).clone() },
+        }))
+    } else {
+        ptr::null_mut()
+    };
     let mut failed = false;
+    let mut again = false;
+    let mut queued: Vec<*mut aiocb> = Vec::new();
     for i in 0..nent as usize {
         let request = unsafe { *list.add(i) };
         if request.is_null() {
             continue;
         }
-        let opcode = unsafe { (*request).aio_lio_opcode };
-        match opcode {
-            LIO_NOP => {}
-            LIO_READ | LIO_WRITE => {
-                if unsafe { perform(request, opcode) } < 0 {
-                    failed = true;
-                } else if unsafe { (*request).__error } != 0 {
+        let kind = match unsafe { (*request).aio_lio_opcode } {
+            LIO_NOP => continue,
+            LIO_READ => Kind::Read,
+            LIO_WRITE => Kind::Write,
+            _ => {
+                // The block tells of the error; the list goes on.
+                unsafe {
+                    (*request).__return = -1;
+                    state_of(request).store(ENDED + EINVAL, Ordering::Release);
+                }
+                failed = true;
+                continue;
+            }
+        };
+        if !group.is_null() {
+            unsafe { (*group).left.fetch_add(1, Ordering::AcqRel) };
+        }
+        match unsafe { submit(request, kind, group) } {
+            Ok(()) => queued.push(request),
+            Err(errno) => {
+                if !group.is_null() {
+                    unsafe { (*group).left.fetch_sub(1, Ordering::AcqRel) };
+                }
+                unsafe {
+                    (*request).__return = -1;
+                    state_of(request).store(ENDED + errno, Ordering::Release);
+                }
+                if errno == EAGAIN {
+                    again = true;
+                } else {
                     failed = true;
                 }
             }
-            _ => {
-                platform::ERRNO.set(EINVAL);
-                return -1;
+        }
+    }
+    unsafe { group_done(group) };
+    if mode == LIO_WAIT {
+        for request in &queued {
+            loop {
+                let seen = EPOCH.load(Ordering::SeqCst);
+                let state = state_of(*request).load(Ordering::Acquire);
+                if state != RUNNING {
+                    if state > ENDED {
+                        failed = true;
+                    }
+                    break;
+                }
+                if sleep_until_change(seen, None) == EINTR {
+                    return fail(EINTR);
+                }
             }
         }
     }
-    if !sig.is_null() && mode == LIO_NOWAIT {
-        unsafe { notify_event(&*sig) };
+    if again {
+        return fail(EAGAIN);
     }
     if failed {
-        platform::ERRNO.set(EIO);
-        return -1;
+        return fail(EIO);
     }
     0
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_error.html>.
 ///
+/// EINPROGRESS while the request runs, the error number of its end (0 for
+/// success), and EINVAL for a block no request was made with or one whose
+/// end `aio_return` took.
+///
 /// # Safety
-/// `aiocbp` points to a request that was made.
+/// `aiocbp` points to a control block.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn aio_error(aiocbp: *const aiocb) -> c_int {
-    unsafe { (*aiocbp).__error }
+    match state_of(aiocbp).load(Ordering::Acquire) {
+        NEW | TAKEN => EINVAL,
+        RUNNING => EINPROGRESS,
+        state => state - ENDED,
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_return.html>.
 ///
+/// The value of the end, once: a second call, a block that was never used
+/// and a request in progress give -1 and EINVAL.
+///
 /// # Safety
-/// `aiocbp` points to a request that is complete.
+/// `aiocbp` points to a control block.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn aio_return(aiocbp: *mut aiocb) -> ssize_t {
-    unsafe { (*aiocbp).__return }
+    let state = state_of(aiocbp);
+    let seen = state.load(Ordering::Acquire);
+    if seen < ENDED {
+        return fail(EINVAL) as ssize_t;
+    }
+    let value = unsafe { ptr::addr_of!((*aiocbp).__return).read_volatile() };
+    match state.compare_exchange(seen, TAKEN, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => value,
+        Err(_) => fail(EINVAL) as ssize_t,
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_cancel.html>.
@@ -217,16 +568,44 @@ pub unsafe extern "C" fn aio_return(aiocbp: *mut aiocb) -> ssize_t {
 /// `aiocbp` is null or points to a request.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn aio_cancel(fildes: c_int, aiocbp: *mut aiocb) -> c_int {
-    if !aiocbp.is_null() && unsafe { (*aiocbp).aio_fildes } != fildes {
-        platform::ERRNO.set(EINVAL);
-        return -1;
-    }
     if unsafe { fcntl(fildes, F_GETFL, 0) } < 0 {
-        platform::ERRNO.set(EBADF);
-        return -1;
+        return fail(EBADF);
     }
-    // Every request is done when its call returns.
-    AIO_ALLDONE
+    if !aiocbp.is_null() {
+        if unsafe { (*aiocbp).aio_fildes } != fildes {
+            return fail(EINVAL);
+        }
+        if state_of(aiocbp).load(Ordering::Acquire) != RUNNING {
+            return AIO_ALLDONE;
+        }
+    }
+    let mut cancelled: Vec<Job> = Vec::new();
+    let mut not_cancelled = false;
+    {
+        let mut state = lock();
+        if let Some(lane) = state.lanes.iter_mut().find(|l| l.fd == fildes) {
+            if aiocbp.is_null() {
+                cancelled.extend(lane.jobs.drain(..));
+                not_cancelled = lane.running;
+            } else if let Some(at) = lane.jobs.iter().position(|j| j.cb == aiocbp) {
+                cancelled.extend(lane.jobs.remove(at));
+            } else {
+                // It is the one that runs.
+                not_cancelled = true;
+            }
+        }
+    }
+    let any = !cancelled.is_empty();
+    for job in cancelled {
+        unsafe { finish(job, ECANCELED, -1) };
+    }
+    if not_cancelled {
+        AIO_NOTCANCELED
+    } else if any {
+        AIO_CANCELED
+    } else {
+        AIO_ALLDONE
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_suspend.html>.
@@ -237,40 +616,44 @@ pub unsafe extern "C" fn aio_cancel(fildes: c_int, aiocbp: *mut aiocb) -> c_int 
 pub unsafe extern "C" fn aio_suspend(
     list: *const *const aiocb,
     nent: c_int,
-    _timeout: *const timespec,
+    timeout: *const timespec,
 ) -> c_int {
     if nent < 0 {
-        platform::ERRNO.set(EINVAL);
-        return -1;
+        return fail(EINVAL);
     }
-    // The requests are done: the wait is over at once.
-    let _ = list;
-    let _ = EAGAIN;
-    0
-}
-
-/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/aio_fsync.html>.
-///
-/// # Safety
-/// `aiocbp` points to a request.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn aio_fsync(operation: c_int, aiocbp: *mut aiocb) -> c_int {
-    let request = unsafe { &mut *aiocbp };
-    let flush = match operation {
-        o if o == crate::header::fcntl::O_SYNC => fsync(request.aio_fildes),
-        o if o == crate::header::fcntl::O_DSYNC => fdatasync(request.aio_fildes),
-        _ => {
-            platform::ERRNO.set(EINVAL);
-            return -1;
-        }
-    };
-    if flush < 0 {
-        request.__error = platform::ERRNO.get();
-        request.__return = -1;
+    let deadline = if timeout.is_null() {
+        None
     } else {
-        request.__error = 0;
-        request.__return = 0;
+        let t = unsafe { &*timeout };
+        if t.tv_sec < 0 || !(0..1_000_000_000).contains(&t.tv_nsec) {
+            return fail(EINVAL);
+        }
+        let mut now = MaybeUninit::<timespec>::uninit();
+        let _ = Sys::clock_gettime(CLOCK_MONOTONIC, Out::from_uninit_mut(&mut now));
+        let now = unsafe { now.assume_init() };
+        let mut sec = now.tv_sec.saturating_add(t.tv_sec);
+        let mut nsec = now.tv_nsec + t.tv_nsec;
+        if nsec >= 1_000_000_000 {
+            nsec -= 1_000_000_000;
+            sec = sec.saturating_add(1);
+        }
+        Some(timespec {
+            tv_sec: sec,
+            tv_nsec: nsec,
+        })
+    };
+    loop {
+        let seen = EPOCH.load(Ordering::SeqCst);
+        for i in 0..nent as usize {
+            let request = unsafe { *list.add(i) };
+            if !request.is_null() && ended(request) {
+                return 0;
+            }
+        }
+        match sleep_until_change(seen, deadline.as_ref()) {
+            0 => {}
+            ETIMEDOUT => return fail(EAGAIN),
+            errno => return fail(errno),
+        }
     }
-    unsafe { notify(aiocbp) };
-    0
 }

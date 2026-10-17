@@ -138,10 +138,12 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
     Some(match name {
         // Defined in unistd.h.
         _SC_VERSION => 202405,
-        // Synchronous RAM fsync works, but the File Synchronization option
-        // also requires the missing aio_fsync interface and aio.h.
-        _SC_FSYNC => -1,
+        // The requests of aio that are queued or run at once, and the
+        // requests of one lio_listio (header/aio).
+        _SC_AIO_MAX | _SC_AIO_LISTIO_MAX => 128,
         _SC_BARRIERS
+        | _SC_FSYNC
+        | _SC_ASYNCHRONOUS_IO
         | _SC_MESSAGE_PASSING
         | _SC_MONOTONIC_CLOCK
         | _SC_PRIORITY_SCHEDULING
@@ -192,7 +194,6 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // the Shell and Utilities volume (_SC_2_VERSION) waits for the
         // utilities of 5n.
         _SC_REALTIME_SIGNALS
-        | _SC_ASYNCHRONOUS_IO
         | _SC_MAPPED_FILES
         | _SC_MEMLOCK
         | _SC_MEMLOCK_RANGE

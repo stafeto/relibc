@@ -3,7 +3,7 @@
 //! See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/mqueue.h.html>.
 //!
 //! A message queue is named `/name` and opened for a descriptor. The queues
-//! live in the pipe service of stafeto, at most 16 messages of 512 bytes
+//! live in the pipe service of stafeto, at most 64 messages of 512 bytes
 //! each, 64 messages in all for the queues and XSI queues together.
 
 use alloc::boxed::Box;
@@ -16,7 +16,7 @@ use crate::{
         fcntl::O_NONBLOCK,
         pthread::{pthread_create, pthread_detach},
         signal::{SIGEV_NONE, SIGEV_SIGNAL, SIGEV_THREAD, sigevent, sigqueue, sigval},
-        time::{CLOCK_REALTIME, timespec},
+        time::{CLOCK_REALTIME, nanosleep, timespec},
         unistd::{close, getpid},
     },
     platform::{
@@ -92,6 +92,10 @@ pub unsafe extern "C" fn mq_close(mqdes: mqd_t) -> c_int {
     if let Err(errno) = ipc::ipc_fd(mqdes, ipc::op::MQ_GETATTR, &[0], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE) {
         return fail(errno);
     }
+    // The close removes the registration for notice that was made with it
+    // (the service takes off only the registration of this descriptor), also
+    // when a child of `fork` still holds a copy of the descriptor.
+    let _ = ipc::ipc_fd(mqdes, ipc::op::MQ_NOTIFY, &[0, 0], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE);
     close(mqdes)
 }
 
@@ -134,7 +138,26 @@ unsafe fn send(
     let words = [0, u64::from(msg_prio), 0, 0];
     let mut out = [0u8; 0];
     match ipc::ipc_fd(mqdes, ipc::op::MQ_SEND, &words, 3, bytes, &mut out, deadline) {
-        Ok(_) => 0,
+        Ok(reply) => {
+            // This message fired a registration for notice. When it is of
+            // this process, its watcher is about to give the notice: the
+            // send waits for it (a moment at most), so that a signal of the
+            // registration has come when the call returns.
+            if reply.words[0] == 1 && WATCHES.load(Ordering::Relaxed) != 0 {
+                let before = DELIVERED.load(Ordering::Acquire);
+                for _ in 0..100 {
+                    if DELIVERED.load(Ordering::Acquire) != before {
+                        break;
+                    }
+                    let nap = timespec { tv_sec: 0, tv_nsec: 200_000 };
+                    unsafe { nanosleep(&nap, ptr::null_mut()) };
+                }
+                // One more call, which the signal waits for.
+                let nap = timespec { tv_sec: 0, tv_nsec: 1_000 };
+                unsafe { nanosleep(&nap, ptr::null_mut()) };
+            }
+            0
+        }
         Err(errno) => fail(errno),
     }
 }
@@ -281,6 +304,9 @@ struct Watch {
     process: c_int,
 }
 
+/// The notices the watchers of this process have given.
+static DELIVERED: AtomicU32 = AtomicU32::new(0);
+
 /// Registrations that are alive in this process: a child of `fork` has no
 /// thread to wait for them.
 static WATCHES: AtomicU32 = AtomicU32::new(0);
@@ -309,6 +335,7 @@ extern "C" fn watcher(arg: *mut core::ffi::c_void) -> *mut core::ffi::c_void {
             function(watch.value);
         }
     }
+    DELIVERED.fetch_add(1, Ordering::Release);
     ptr::null_mut()
 }
 
@@ -326,7 +353,9 @@ pub unsafe extern "C" fn mq_notify(mqdes: mqd_t, notification: *const sigevent) 
     if !matches!(event.sigev_notify, SIGEV_NONE | SIGEV_SIGNAL | SIGEV_THREAD) {
         return fail(EINVAL);
     }
-    if event.sigev_notify == SIGEV_SIGNAL && !(1..=31).contains(&event.sigev_signo) {
+    // Signal 0 is taken as Linux takes it: the registration is made and no
+    // signal is sent.
+    if event.sigev_notify == SIGEV_SIGNAL && !(0..=31).contains(&event.sigev_signo) {
         return fail(EINVAL);
     }
     if let Err(errno) = ipc::ipc_fd(mqdes, ipc::op::MQ_NOTIFY, &[0, 1], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE) {

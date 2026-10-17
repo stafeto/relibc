@@ -68,6 +68,10 @@ impl Semaphore {
             }
             // value must be zero
             if let Some(timeout) = timeout_opt {
+                // The wait would block: a time out of range is the error.
+                if timeout.tv_nsec < 0 || timeout.tv_nsec >= 1_000_000_000 {
+                    return Err(Errno(errno::EINVAL));
+                }
                 let relative = match clock_id {
                     // FUTEX expect monotonic clock
                     CLOCK_MONOTONIC => timeout.clone(),

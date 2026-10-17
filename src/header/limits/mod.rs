@@ -110,6 +110,11 @@ pub const _POSIX_MAX_CANON: c_long = 255;
 /// Minimum required value for `MAX_INPUT`.
 pub const _POSIX_MAX_INPUT: c_long = 255;
 /// Minimum required value for `NAME_MAX`.
+pub const _POSIX_MQ_OPEN_MAX: c_long = 8;
+pub const _POSIX_MQ_PRIO_MAX: c_long = 32;
+/// The priorities of a message are below this (the pipe service of stafeto
+/// checks the same number).
+pub const MQ_PRIO_MAX: c_long = 32768;
 pub const _POSIX_NAME_MAX: c_long = 14;
 pub const _POSIX_NGROUPS_MAX: c_long = 8;
 pub const _POSIX_OPEN_MAX: c_long = 20;

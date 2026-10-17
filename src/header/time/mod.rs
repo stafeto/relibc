@@ -39,6 +39,8 @@ pub mod constants;
 mod posix_tz;
 mod strftime;
 mod strptime;
+#[cfg(stafeto)]
+mod thread_timer;
 pub use strptime::strptime;
 
 /// cbindgen:ignore
@@ -686,6 +688,15 @@ pub unsafe extern "C" fn timer_create(
     // stafeto: bit 8 of the notification type says the value is the number.
     default.sigev_notify = crate::header::signal::SIGEV_SIGNAL | 0x100;
     let evp = unsafe { evp.as_ref() }.unwrap_or(&default);
+    #[cfg(stafeto)]
+    if evp.sigev_notify == crate::header::signal::SIGEV_THREAD {
+        return thread_timer::create(clock_id, evp)
+            .map(|timer| {
+                timerid.write(timer);
+                0
+            })
+            .or_minus_one_errno();
+    }
     Sys::timer_create(clock_id, evp)
         .map(|timer| {
             timerid.write(timer);
@@ -697,12 +708,20 @@ pub unsafe extern "C" fn timer_create(
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/timer_delete.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn timer_delete(timerid: timer_t) -> c_int {
+    #[cfg(stafeto)]
+    if thread_timer::delete(timerid).is_some() {
+        return 0;
+    }
     Sys::timer_delete(timerid).map(|()| 0).or_minus_one_errno()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/timer_getoverrun.html>.
 #[unsafe(no_mangle)]
 pub extern "C" fn timer_getoverrun(timerid: timer_t) -> c_int {
+    #[cfg(stafeto)]
+    if let Some(overrun) = thread_timer::getoverrun(timerid) {
+        return overrun;
+    }
     Sys::timer_getoverrun(timerid).or_minus_one_errno()
 }
 
@@ -712,6 +731,11 @@ pub unsafe extern "C" fn timer_gettime(timerid: timer_t, value: *mut itimerspec)
     let Some(mut value) = (unsafe { Out::nullable(value) }) else {
         return Err(Errno(EINVAL)).or_minus_one_errno();
     };
+    #[cfg(stafeto)]
+    if let Some(itimer) = thread_timer::gettime(timerid) {
+        value.write(itimer);
+        return 0;
+    }
     Sys::timer_gettime(timerid)
         .map(|itimer| {
             value.write(itimer);
@@ -731,6 +755,18 @@ pub unsafe extern "C" fn timer_settime(
     let (Some(value), ovalue) = (unsafe { (value.as_ref(), Out::nullable(ovalue)) }) else {
         return Err(Errno(EINVAL)).or_minus_one_errno();
     };
+    #[cfg(stafeto)]
+    if let Some(done) = thread_timer::settime(timerid, flags, value) {
+        return match done {
+            Ok(old) => {
+                if let Some(mut out) = ovalue {
+                    out.write(old);
+                }
+                0
+            }
+            Err(error) => Err::<c_int, Errno>(error).or_minus_one_errno(),
+        };
+    }
     Sys::timer_settime(timerid, flags, value, ovalue)
         .map(|()| 0)
         .or_minus_one_errno()
