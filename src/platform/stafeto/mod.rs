@@ -77,6 +77,9 @@ unsafe extern "C" {
     fn stafeto_mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
     fn stafeto_msync(addr: *mut c_void, len: usize, flags: c_int) -> c_int;
     fn stafeto_map_check(addr: *const c_void, len: usize) -> c_int;
+    fn stafeto_mlock(addr: *const c_void, len: usize) -> c_int;
+    fn stafeto_munlock(addr: *const c_void, len: usize) -> c_int;
+    fn stafeto_mlockall(flags: c_int) -> c_int;
     fn stafeto_getpid() -> pid_t;
     fn stafeto_getppid() -> pid_t;
     /// pipe2: the read end and the write end of a new pipe of the pipe
@@ -246,6 +249,7 @@ unsafe extern "C" {
     /// fork by a full copy of the process: the child's PID, 0 in the
     /// child, or the negated errno.
     fn stafeto_fork() -> pid_t;
+    fn stafeto_fork_done();
     /// execve of the program at `path` with `argv` and `envp`: it
     /// returns only with the negated errno.
     fn stafeto_exec(
@@ -442,6 +446,12 @@ extern "C" fn fork_child() {
             stream.reset_lock_after_fork();
         }
     }
+}
+
+/// The end of `fork`, after relibc let go of its locks: pending signals are
+/// delivered.
+pub(crate) fn fork_done() {
+    unsafe { stafeto_fork_done() }
 }
 
 /// The stafeto layer returns a value or a negated errno.
@@ -1025,8 +1035,23 @@ impl Pal for Sys {
         unsafe { stafeto_thread_id() }
     }
 
-    fn gettimeofday(tp: Out<timeval>, tzp: Option<Out<timezone>>) -> Result<()> {
-        Err(Errno(ENOSYS))
+    fn gettimeofday(mut tp: Out<timeval>, tzp: Option<Out<timezone>>) -> Result<()> {
+        let mut now = timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        ret(unsafe { stafeto_clock_gettime(0, &raw mut now) } as isize)?;
+        tp.write(timeval {
+            tv_sec: now.tv_sec,
+            tv_usec: (now.tv_nsec / 1000) as _,
+        });
+        if let Some(mut tz) = tzp {
+            tz.write(timezone {
+                tz_minuteswest: 0,
+                tz_dsttime: 0,
+            });
+        }
+        Ok(())
     }
 
     fn getuid() -> uid_t {
@@ -1066,8 +1091,8 @@ impl Pal for Sys {
 
     unsafe fn mlock(addr: *const c_void, len: usize) -> Result<()> {
         // The memory of a process is resident: it is never paged out, so
-        // only the range is checked.
-        ret(unsafe { stafeto_map_check(addr, len) } as isize).map(|_| ())
+        // only the range and the right to lock it are checked.
+        ret(unsafe { stafeto_mlock(addr, len) } as isize).map(|_| ())
     }
 
     unsafe fn mlockall(flags: c_int) -> Result<()> {
@@ -1078,7 +1103,7 @@ impl Pal for Sys {
             return Err(Errno(EINVAL));
         }
         // The memory of a process is resident: it is never paged out.
-        Ok(())
+        ret(unsafe { stafeto_mlockall(flags) } as isize).map(|_| ())
     }
 
     unsafe fn mmap(
@@ -1126,12 +1151,12 @@ impl Pal for Sys {
 
     unsafe fn munlock(addr: *const c_void, len: usize) -> Result<()> {
         // The memory of a process is resident: it is never paged out.
-        ret(unsafe { stafeto_map_check(addr, len) } as isize).map(|_| ())
+        ret(unsafe { stafeto_munlock(addr, len) } as isize).map(|_| ())
     }
 
     unsafe fn munlockall() -> Result<()> {
         // The memory of a process is resident: it is never paged out.
-        Ok(())
+        ret(unsafe { stafeto_mlockall(0) } as isize).map(|_| ())
     }
 
     unsafe fn munmap(addr: *mut c_void, len: usize) -> Result<()> {

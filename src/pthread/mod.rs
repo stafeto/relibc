@@ -38,6 +38,7 @@ pub unsafe fn init() {
         has_enabled_cancelation: AtomicBool::new(false),
         has_queued_cancelation: AtomicBool::new(false),
         flags: PthreadFlags::empty().bits().into(),
+        registered: core::sync::atomic::AtomicU32::new(1),
 
         //index: FIRST_THREAD_IDX,
 
@@ -85,6 +86,10 @@ pub struct Pthread {
     pub(crate) has_queued_cancelation: AtomicBool,
     pub(crate) has_enabled_cancelation: AtomicBool,
     pub(crate) flags: AtomicUsize,
+    /// 0 until the creator has put the thread in the table of threads: a
+    /// thread of a higher priority than its creator's waits for that before
+    /// it runs (it could end and be freed first).
+    pub(crate) registered: core::sync::atomic::AtomicU32,
 
     pub(crate) stack_base: *mut c_void,
     pub(crate) stack_size: usize,
@@ -172,13 +177,23 @@ pub(crate) unsafe fn create(
         attrs.stacksize.next_multiple_of(Sys::getpagesize())
     };
 
+    // stafeto: the guard area of a stack relibc maps is the pages below it
+    // that are given back at once, so that a stack that overflows faults.
+    #[cfg(stafeto)]
+    let guard = if attrs.stack == 0 {
+        attrs.guardsize.next_multiple_of(Sys::getpagesize())
+    } else {
+        0
+    };
+    #[cfg(not(stafeto))]
+    let guard = 0;
     let stack_base = if attrs.stack != 0 {
         attrs.stack as *mut c_void
     } else {
         let ret = unsafe {
             sys_mman::mmap(
                 core::ptr::null_mut(),
-                stack_size,
+                stack_size + guard,
                 sys_mman::PROT_READ | sys_mman::PROT_WRITE,
                 sys_mman::MAP_PRIVATE | sys_mman::MAP_ANONYMOUS,
                 -1,
@@ -189,7 +204,10 @@ pub(crate) unsafe fn create(
             // "Insufficient resources"
             return Err(Errno(EAGAIN));
         }
-        ret
+        if guard != 0 {
+            unsafe { Sys::munmap(ret, guard) }.ok();
+        }
+        unsafe { ret.add(guard) }
     };
 
     let mut flags = PthreadFlags::empty();
@@ -268,6 +286,11 @@ pub(crate) unsafe fn create(
         .lock()
         .insert(os_tid, ForceSendSync(new_tcb));
 
+    // The thread may go on now.
+    let registered = &raw const new_tcb.pthread.registered;
+    unsafe { (*registered).store(1, Ordering::SeqCst) };
+    crate::sync::futex_wake(unsafe { &*registered }, 1);
+
     Ok(&raw const new_tcb.pthread as *mut _)
 }
 
@@ -317,7 +340,59 @@ unsafe extern "C" fn new_thread_shim(
 
     unsafe { exit_current_thread(Retval(retval)) }
 }
+/// What a `pthread_t` that join or detach is given stands for (stafeto).
+#[cfg(stafeto)]
+enum Standing {
+    /// A thread that is there.
+    Live,
+    /// A detached thread that ended and was freed lately.
+    Detached,
+    /// None: it was joined, or never was.
+    Gone,
+}
+
+/// The last detached threads that ended, by the address of their `Pthread`.
+#[cfg(stafeto)]
+static ENDED_DETACHED: Mutex<([usize; 32], usize)> = Mutex::new(([0; 32], 0));
+
+#[cfg(stafeto)]
+fn standing(thread: &Pthread) -> Standing {
+    let address = thread as *const Pthread as usize;
+    // The calling thread is there, whether its creator put it in the table
+    // yet or not.
+    if current_thread().is_some_and(|own| core::ptr::eq(own, thread)) {
+        return Standing::Live;
+    }
+    let live = OS_TID_TO_PTHREAD
+        .lock()
+        .values()
+        .any(|tcb| core::ptr::eq(unsafe { &(*tcb.0).pthread }, thread));
+    if live {
+        Standing::Live
+    } else if ENDED_DETACHED.lock().0.contains(&address) {
+        Standing::Detached
+    } else {
+        Standing::Gone
+    }
+}
+
+/// The end of a detached thread is remembered, so that a join or a detach
+/// of it that comes later says EINVAL and not ESRCH.
+#[cfg(stafeto)]
+fn remember_detached(thread: &Pthread) {
+    let mut ended = ENDED_DETACHED.lock();
+    let at = ended.1 % 32;
+    ended.0[at] = thread as *const Pthread as usize;
+    ended.1 += 1;
+}
+
 pub unsafe fn join(thread: &Pthread) -> Result<Retval, Errno> {
+    #[cfg(stafeto)]
+    match standing(thread) {
+        Standing::Live => {}
+        Standing::Detached => return Err(Errno(EINVAL)),
+        Standing::Gone => return Err(Errno(ESRCH)),
+    }
     // We don't have to return EDEADLK, but unlike e.g. pthread_t lifetime checking, it's a
     // relatively easy check.
     if core::ptr::eq(
@@ -325,6 +400,12 @@ pub unsafe fn join(thread: &Pthread) -> Result<Retval, Errno> {
         current_thread().expect("current thread not present"),
     ) {
         return Err(Errno(EDEADLK));
+    }
+
+    // A thread that is detached cannot be joined (EINVAL).
+    #[cfg(stafeto)]
+    if thread.flags.load(Ordering::Acquire) & PthreadFlags::DETACHED.bits() != 0 {
+        return Err(Errno(EINVAL));
     }
 
     // Waitval starts locked, and is unlocked when the thread finishes.
@@ -344,11 +425,22 @@ pub unsafe fn join(thread: &Pthread) -> Result<Retval, Errno> {
 }
 
 pub unsafe fn detach(thread: &Pthread) -> Result<(), Errno> {
+    #[cfg(stafeto)]
+    match standing(thread) {
+        Standing::Live => {}
+        Standing::Detached => return Err(Errno(EINVAL)),
+        Standing::Gone => return Err(Errno(ESRCH)),
+    }
     let previous = thread
         .flags
         .fetch_or(PthreadFlags::DETACHED.bits(), Ordering::AcqRel);
     // stafeto: a thread that already ended joinable is freed by its
     // detach; nothing else would join it.
+    #[cfg(stafeto)]
+    if previous & PthreadFlags::DETACHED.bits() != 0 {
+        // Already detached: not a joinable thread (EINVAL).
+        return Err(Errno(EINVAL));
+    }
     #[cfg(stafeto)]
     if previous & PthreadFlags::EXITED.bits() != 0 {
         unsafe { dealloc_thread(thread) };
@@ -426,6 +518,13 @@ pub unsafe fn exit_current_thread(retval: Retval) -> ! {
         stack_size = 0;
     }
     if flags & PthreadFlags::DETACHED.bits() != 0 {
+        // A thread of a higher priority than its creator's may end before
+        // the creator put it in the table of threads: it waits for that
+        // before it is freed.
+        #[cfg(stafeto)]
+        while this.registered.load(Ordering::SeqCst) == 0 {
+            crate::sync::futex_wait(&this.registered, 0, None);
+        }
         // When detached, the thread state no longer makes any sense, and can immediately be
         // deallocated.
         unsafe { dealloc_thread(this) };
@@ -442,6 +541,10 @@ pub unsafe fn exit_current_thread(retval: Retval) -> ! {
 }
 
 unsafe fn dealloc_thread(thread: &Pthread) {
+    #[cfg(stafeto)]
+    if thread.flags.load(Ordering::Acquire) & PthreadFlags::DETACHED.bits() != 0 {
+        remember_detached(thread);
+    }
     // TODO: How should this be handled on Linux?
     unsafe {
         OS_TID_TO_PTHREAD.lock().remove(&thread.os_tid.get().read());

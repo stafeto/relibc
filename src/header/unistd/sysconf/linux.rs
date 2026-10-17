@@ -147,6 +147,14 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_MESSAGE_PASSING
         | _SC_MONOTONIC_CLOCK
         | _SC_PRIORITY_SCHEDULING
+        | _SC_REALTIME_SIGNALS
+        | _SC_CPUTIME
+        | _SC_THREAD_CPUTIME
+        | _SC_MAPPED_FILES
+        | _SC_MEMLOCK
+        | _SC_MEMLOCK_RANGE
+        | _SC_MEMORY_PROTECTION
+        | _SC_SHARED_MEMORY_OBJECTS
         | _SC_THREAD_PRIORITY_SCHEDULING
         | _SC_THREAD_PRIO_INHERIT
         | _SC_THREAD_PRIO_PROTECT
@@ -158,11 +166,11 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_TIMEOUTS
         | _SC_TIMERS => 202405,
         // The timers of the process service: 32 a process, and the count of
-        // overruns stops at the largest int. A signal has one place, so the
-        // queued signals a process may have pending are its 31 signals.
+        // overruns stops at the largest int. The occurrences sigqueue sent
+        // that wait for a process: 32.
         _SC_TIMER_MAX => 32,
         _SC_DELAYTIMER_MAX => 2147483647,
-        _SC_SIGQUEUE_MAX => 31,
+        _SC_SIGQUEUE_MAX => 32,
         _SC_JOB_CONTROL | _SC_SAVED_IDS | _SC_SHELL => 1,
         // The message queues and named semaphores of the pipe service: the
         // descriptors a process opens (those of the sockets, 20 for a session),
@@ -170,7 +178,7 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // the largest value.
         _SC_MQ_OPEN_MAX => 20,
         _SC_MQ_PRIO_MAX => 32768,
-        _SC_SEM_NSEMS_MAX => 16,
+        _SC_SEM_NSEMS_MAX => 256,
         _SC_SEM_VALUE_MAX => 32767,
         // A lowered process limit constrains allocation; infinity does not
         // enlarge the layer's physical descriptor table.
@@ -193,16 +201,8 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // the platform has no such service. The XSI option is not claimed;
         // the Shell and Utilities volume (_SC_2_VERSION) waits for the
         // utilities of 5n.
-        _SC_REALTIME_SIGNALS
-        | _SC_MAPPED_FILES
-        | _SC_MEMLOCK
-        | _SC_MEMLOCK_RANGE
-        | _SC_MEMORY_PROTECTION
-        | _SC_SHARED_MEMORY_OBJECTS
-        | _SC_THREAD_PROCESS_SHARED
+        _SC_THREAD_PROCESS_SHARED
         | _SC_ADVISORY_INFO
-        | _SC_CPUTIME
-        | _SC_THREAD_CPUTIME
         | _SC_IPV6
         | _SC_RAW_SOCKETS
         | _SC_2_VERSION
@@ -296,9 +296,9 @@ pub(super) fn sysconf_impl(name: c_int) -> c_long {
         // TODO: limits.h
         _SC_THREAD_DESTRUCTOR_ITERATIONS => -1,
         // TODO: limits.h
-        _SC_THREAD_KEYS_MAX => -1,
+        _SC_THREAD_KEYS_MAX => PTHREAD_KEYS_MAX,
         // TODO: limits.h
-        _SC_THREAD_STACK_MIN => -1,
+        _SC_THREAD_STACK_MIN => PTHREAD_STACK_MIN,
         _SC_THREAD_THREADS_MAX => -1,
         _SC_THREAD_ATTR_STACKADDR => _POSIX_VERSION,
         _SC_THREAD_ATTR_STACKSIZE => _POSIX_VERSION,

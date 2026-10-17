@@ -22,13 +22,13 @@ pub use crate::header::{
 /// Used for read/write lock attributes.
 #[repr(C)]
 pub union pthread_rwlockattr_t {
-    __relibc_internal_size: [c_uchar; 1],
+    __relibc_internal_size: [c_uchar; 2],
     __relibc_internal_align: c_uchar,
 }
 /// Used for read-write locks.
 #[repr(C)]
 pub union pthread_rwlock_t {
-    __relibc_internal_size: [c_uchar; 4],
+    __relibc_internal_size: [c_uchar; 8],
     __relibc_internal_align: c_int,
 }
 /// Used to identify a barrier.
