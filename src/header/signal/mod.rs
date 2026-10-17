@@ -7,7 +7,7 @@ use core::{mem, ptr};
 use cbitset::BitSet;
 
 #[cfg(target_os = "linux")]
-use crate::platform::types::c_short;
+use crate::platform::types::{c_long, c_short};
 use crate::platform::types::pthread_attr_t;
 use crate::{
     error::{Errno, ResultExt},
@@ -191,6 +191,7 @@ pub struct siginfo {
 pub union siginfo_sifields {
     pub __si_common: siginfo_common,
     pub __sigfault: siginfo_sigfault,
+    pub __sigpoll: siginfo_sigpoll,
     // 128 - 16
     pub _pad: [c_char; 112],
 }
@@ -202,6 +203,14 @@ pub struct siginfo_common {
     pub si_pid: pid_t,
     pub si_uid: uid_t,
     pub si_value: sigval,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct siginfo_sigpoll {
+    pub si_band: c_long,
+    pub si_fd: c_int,
 }
 
 #[cfg(target_os = "linux")]
