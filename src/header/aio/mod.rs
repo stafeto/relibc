@@ -11,7 +11,7 @@ use crate::{
         errno::{EAGAIN, EBADF, EINVAL, EIO},
         fcntl::{F_GETFL, fcntl},
         pthread::{pthread_create, pthread_detach},
-        signal::{SIGEV_SIGNAL, SIGEV_THREAD, kill, sigevent, sigval},
+        signal::{SIGEV_SIGNAL, SIGEV_THREAD, sigevent, sigqueue, sigval},
         time::timespec,
         unistd::{fdatasync, fsync, getpid, pread, pwrite},
     },
@@ -52,7 +52,7 @@ pub struct aiocb {
 /// function of SIGEV_THREAD run in a thread of its own.
 unsafe fn notify_event(event: &sigevent) {
     if event.sigev_notify == SIGEV_SIGNAL && event.sigev_signo != 0 {
-        kill(getpid(), event.sigev_signo);
+        sigqueue(getpid(), event.sigev_signo, event.sigev_value);
     }
     #[cfg(stafeto)]
     if event.sigev_notify == SIGEV_THREAD

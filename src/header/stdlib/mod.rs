@@ -1596,6 +1596,68 @@ pub fn convert_integer(orig_s: CStr, base: c_int) -> Option<(c_ulong, CStr, bool
     }
 }
 
+/// Whether `s` (after the sign) starts a hexadecimal floating constant: "0x"
+/// and a hexadecimal digit, or a point and a hexadecimal digit.
+pub(crate) fn hex_float_ahead(s: &[u8]) -> bool {
+    match s {
+        [b'0', x, rest @ ..] if x | 0x20 == b'x' => match rest {
+            [d, ..] if d.is_ascii_hexdigit() => true,
+            [b'.', d, ..] => d.is_ascii_hexdigit(),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// The length of the longest decimal floating constant at the start of `s`
+/// (digits with an optional point, and an exponent when it has digits), 0
+/// for none.
+pub(crate) fn decimal_prefix(s: &[u8]) -> usize {
+    let mut i = 0;
+    let mut digits = 0;
+    while i < s.len() && s[i].is_ascii_digit() {
+        i += 1;
+        digits += 1;
+    }
+    if i < s.len() && s[i] == b'.' {
+        i += 1;
+        while i < s.len() && s[i].is_ascii_digit() {
+            i += 1;
+            digits += 1;
+        }
+    }
+    if digits == 0 {
+        return 0;
+    }
+    if i < s.len() && s[i] | 0x20 == b'e' {
+        let mut j = i + 1;
+        if j < s.len() && (s[j] == b'+' || s[j] == b'-') {
+            j += 1;
+        }
+        let first = j;
+        while j < s.len() && s[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > first {
+            i = j;
+        }
+    }
+    i
+}
+
+/// Whether the mantissa of the decimal constant `s` has a digit but zero.
+pub(crate) fn has_nonzero_digit(s: &[u8]) -> bool {
+    for &c in s {
+        if c | 0x20 == b'e' {
+            return false;
+        }
+        if (b'1'..=b'9').contains(&c) {
+            return true;
+        }
+    }
+    false
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strtod.html>.
 #[expect(clippy::cast_lossless)] // not all users of `strto_float_impl!` are lossless
 #[unsafe(no_mangle)]

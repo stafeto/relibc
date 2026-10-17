@@ -339,6 +339,7 @@ macro_rules! strto_float_impl {
         use $crate::c_str::CStr;
 
         let mut s = $s;
+        let original = s;
         let mut endptr = $endptr;
 
         s = s.trim_start_whitespace();
@@ -366,8 +367,27 @@ macro_rules! strto_float_impl {
             // https://github.com/rust-lang/rust/issues/73328 , https://github.com/rust-lang/rust/issues/81261
             result = $type::NAN;
             s = rest;
+        } else if !$crate::header::stdlib::hex_float_ahead(s.to_bytes()) {
+            // stafeto: a decimal constant is converted whole, with the
+            // rounding of the whole constant, by the parser of core; the
+            // digits are not accumulated in floating point.
+            let bytes = s.to_bytes();
+            let length = $crate::header::stdlib::decimal_prefix(bytes);
+            if length == 0 {
+                // No conversion: *endptr is the string as it came.
+                if let Some(ref mut end) = endptr {
+                    **end = original.as_ptr().cast_mut();
+                }
+                return 0.0;
+            }
+            let text = unsafe { core::str::from_utf8_unchecked(&bytes[..length]) };
+            result = text.parse::<$type>().unwrap_or(0.0);
+            if result.is_infinite() || (result == 0.0 && $crate::header::stdlib::has_nonzero_digit(&bytes[..length])) {
+                $crate::platform::ERRNO.set($crate::header::errno::ERANGE);
+            }
+            s = unsafe { s.advance_unchecked(length) }.1;
         } else {
-            if let Some(rest) = s.strip_prefix(b"0x") {
+            if let Some(rest) = s.strip_case_insensitive_prefix(b"0x") {
                 s = rest;
                 radix = 16;
             }
@@ -408,25 +428,29 @@ macro_rules! strto_float_impl {
 
                         // Exponent digits are always in base 10.
                         if let Some(first_char) = s.first_char() && first_char.is_digit(10) {
-                            let mut exponent_value = 0;
+                            let mut exponent_value: u32 = 0;
 
                             while let Some((first_char, after)) = s.split_first_char() && let Some(digit) = first_char.to_digit(10) {
-                                exponent_value *= 10;
-                                exponent_value += digit;
+                                exponent_value = exponent_value.saturating_mul(10).saturating_add(digit);
                                 s = after;
                             }
 
-                            let exponent_base = match radix {
-                                10 => 10u128,
-                                16 => 2u128,
-                                _ => unreachable!(),
-                            };
-
-                            if is_exponent_positive {
-                                Some(exponent_base.pow(exponent_value) as $type)
-                            } else {
-                                Some(1.0 / (exponent_base.pow(exponent_value) as $type))
+                            // 2**exponent_value in steps that neither overflow
+                            // nor lose the subnormal range; the exponent of
+                            // a hexadecimal constant is a power of two.
+                            let steps = exponent_value.min(5000) / 60;
+                            let rest_bits = exponent_value.min(5000) % 60;
+                            let mut power: $type = 1.0;
+                            let mut factor: $type = (1u64 << 60) as $type;
+                            if !is_exponent_positive {
+                                factor = 1.0 / factor;
                             }
+                            for _ in 0..steps {
+                                power *= factor;
+                            }
+                            let tail = (1u64 << rest_bits) as $type;
+                            power = if is_exponent_positive { power * tail } else { power / tail };
+                            Some(power)
                         } else {
                             // Exponent had no valid digits after 'e'/'p' and '+'/'-', rollback
                             s = s_before_exponent;

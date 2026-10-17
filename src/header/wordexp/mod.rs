@@ -115,7 +115,7 @@ pub unsafe extern "C" fn wordexp(
     }
     script.extend_from_slice(b"for w in ");
     script.extend_from_slice(text);
-    script.extend_from_slice(b"; do echo \"$w\"");
+    script.extend_from_slice(b"; do printf '%s\\n' \"$w\"");
     script.push(MARK);
     script.extend_from_slice(b"; done; }");
     if flags & WRDE_SHOWERR == 0 {
