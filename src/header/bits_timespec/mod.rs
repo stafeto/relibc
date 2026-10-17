@@ -37,10 +37,13 @@ impl timespec {
         let delta_nsec = later.tv_nsec.checked_sub(earlier.tv_nsec)?;
 
         let time = if delta_nsec < 0 {
-            let roundup_sec = -delta_nsec / NANOSECONDS + 1;
+            // stafeto: borrow whole seconds until the nanoseconds are not
+            // negative (the nanoseconds were NANOSECONDS - delta_nsec, a
+            // second too long, for a difference that crosses a second).
+            let borrow = (-delta_nsec + NANOSECONDS - 1) / NANOSECONDS;
             timespec {
-                tv_sec: delta_sec - time_t::from(roundup_sec),
-                tv_nsec: roundup_sec * NANOSECONDS - delta_nsec,
+                tv_sec: delta_sec - time_t::from(borrow),
+                tv_nsec: borrow * NANOSECONDS + delta_nsec,
             }
         } else {
             timespec {
