@@ -149,6 +149,11 @@ pub unsafe extern "C" fn sem_close(sem: *mut sem_t) -> c_int {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sem_destroy(sem: *mut sem_t) -> c_int {
     unsafe { core::ptr::drop_in_place(sem.cast::<RlctSempahore>()) };
+    let _ = UNNAMED.fetch_update(
+        core::sync::atomic::Ordering::SeqCst,
+        core::sync::atomic::Ordering::SeqCst,
+        |n| n.checked_sub(1),
+    );
     0
 }
 
@@ -168,10 +173,25 @@ pub unsafe extern "C" fn sem_getvalue(sem: *mut sem_t, sval: *mut c_int) -> c_in
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sem_init.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sem_init(sem: *mut sem_t, _pshared: c_int, value: c_uint) -> c_int {
+    // A value past {SEM_VALUE_MAX} is EINVAL; {SEM_NSEMS_MAX} semaphores at a
+    // time (counted from `sem_init` to `sem_destroy`) is ENOSPC beyond.
+    if value > SEM_VALUE_MAX as c_uint {
+        platform::ERRNO.set(errno::EINVAL);
+        return -1;
+    }
+    if UNNAMED.fetch_add(1, core::sync::atomic::Ordering::SeqCst) >= SEM_NSEMS_MAX {
+        UNNAMED.fetch_sub(1, core::sync::atomic::Ordering::SeqCst);
+        platform::ERRNO.set(errno::ENOSPC);
+        return -1;
+    }
     unsafe { sem.cast::<RlctSempahore>().write(RlctSempahore::new(value)) };
 
     0
 }
+
+/// {SEM_NSEMS_MAX}: the semaphores of `sem_init` a process has at a time.
+pub const SEM_NSEMS_MAX: usize = 256;
+static UNNAMED: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sem_open.html>.
 ///
@@ -259,6 +279,11 @@ pub unsafe extern "C" fn sem_unlink(name: *const c_char) -> c_int {
         return -1;
     }
     let bytes = unsafe { CStr::from_ptr(name) }.to_bytes();
+    // A semaphore with no name does not exist.
+    if bytes.is_empty() {
+        platform::ERRNO.set(errno::ENOENT);
+        return -1;
+    }
     match ipc::ipc(ipc::op::NSEM_UNLINK, &[0; 1], 0, bytes, &mut [], ipc::NO_DEADLINE) {
         Ok(_) => 0,
         Err(e) => {
@@ -270,11 +295,32 @@ pub unsafe extern "C" fn sem_unlink(name: *const c_char) -> c_int {
 
 /// The wait on a named semaphore: `nowait` is 1 for `sem_trywait`.
 fn named_wait(id: u64, nowait: u64, deadline: u64) -> c_int {
-    match ipc::ipc(ipc::op::NSEM_WAIT, &[id, nowait, 0], 2, &[], &mut [], deadline) {
-        Ok(_) => 0,
-        Err(e) => {
-            platform::ERRNO.set(e);
-            -1
+    loop {
+        match ipc::ipc(ipc::op::NSEM_WAIT, &[id, nowait, 0], 2, &[], &mut [], deadline) {
+            Ok(_) => return 0,
+            // A blocking wait the service has no room to keep (EAGAIN: it
+            // keeps a bounded number of waiting operations) is asked again
+            // a moment later, until its deadline.
+            Err(errno::EAGAIN) if nowait == 0 => {
+                let mut now = time::timespec::default();
+                unsafe { time::clock_gettime(time::CLOCK_MONOTONIC, &mut now) };
+                let at = (now.tv_sec as u64)
+                    .saturating_mul(1_000_000_000)
+                    .saturating_add(now.tv_nsec as u64);
+                if deadline != ipc::NO_DEADLINE && at >= deadline {
+                    platform::ERRNO.set(errno::ETIMEDOUT);
+                    return -1;
+                }
+                let pause = time::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 2_000_000,
+                };
+                unsafe { time::nanosleep(&pause, core::ptr::null_mut()) };
+            }
+            Err(e) => {
+                platform::ERRNO.set(e);
+                return -1;
+            }
         }
     }
 }

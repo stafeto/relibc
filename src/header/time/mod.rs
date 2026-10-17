@@ -41,6 +41,8 @@ mod strftime;
 mod strptime;
 #[cfg(stafeto)]
 mod thread_timer;
+#[cfg(stafeto)]
+pub(crate) use thread_timer::interval_timer;
 pub use strptime::strptime;
 
 /// cbindgen:ignore
@@ -261,16 +263,21 @@ pub extern "C" fn clock() -> clock_t {
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/clock_getcpuclockid.html>.
 ///
-/// stafeto: the CPU-time clock of the calling process; another process's
-/// CPU time is not the caller's to read (EPERM; ESRCH for none).
+/// stafeto: the CPU-time clock of the calling process, or of another one
+/// the caller may send a signal to (EPERM otherwise, ESRCH for none): its
+/// number is the PID above three bits and 5 in them.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn clock_getcpuclockid(pid: pid_t, clock_id: *mut clockid_t) -> c_int {
     if clock_id.is_null() {
         return crate::header::errno::EINVAL;
     }
+    if pid < 0 {
+        return crate::header::errno::ESRCH;
+    }
     if pid != 0 && pid != crate::header::unistd::getpid() {
         return if crate::header::signal::kill(pid, 0) == 0 {
-            crate::header::errno::EPERM
+            unsafe { clock_id.write((pid << 3) | 5) };
+            0
         } else {
             crate::platform::ERRNO.get()
         };
@@ -377,12 +384,12 @@ pub unsafe extern "C" fn difftime(time1: time_t, time0: time_t) -> c_double {
 /// cannot be read, 4 it is no regular file, 5 it cannot be read, 6 no
 /// memory, 7 no line takes the string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn getdate(string: *const c_char) -> *const tm {
+pub unsafe extern "C" fn getdate(string: *const c_char) -> *mut tm {
     use crate::io::{BufRead, BufReader};
     static GETDATE_TM: RawCell<tm> = RawCell::new(blank_tm());
-    let fail = |code: c_int| -> *const tm {
+    let fail = |code: c_int| -> *mut tm {
         unsafe { getdate_err = code };
-        ptr::null()
+        ptr::null_mut()
     };
     let mask = unsafe { getenv(c"DATEMSK".as_ptr().cast()) };
     if mask.is_null() || unsafe { *mask } == 0 {
@@ -689,7 +696,7 @@ pub unsafe extern "C" fn timer_create(
     default.sigev_notify = crate::header::signal::SIGEV_SIGNAL | 0x100;
     let evp = unsafe { evp.as_ref() }.unwrap_or(&default);
     #[cfg(stafeto)]
-    if evp.sigev_notify == crate::header::signal::SIGEV_THREAD {
+    if evp.sigev_notify == crate::header::signal::SIGEV_THREAD || thread_timer::is_cpu(clock_id) {
         return thread_timer::create(clock_id, evp)
             .map(|timer| {
                 timerid.write(timer);

@@ -199,7 +199,8 @@ pub const POSIX_ALLOC_SIZE_MIN: c_long = 4096;
 
 // PTHREAD_DESTRUCTOR_ITERATIONS defined in bits file
 // TODO: What should this limit be? Both glibc and musl have it as 1024
-pub const PTHREAD_KEYS_MAX: c_long = 4096 * 32;
+/// stafeto: 1024 keys at a time; a process has a few megabytes.
+pub const PTHREAD_KEYS_MAX: c_long = 1024;
 pub const PTHREAD_STACK_MIN: c_long = 65536;
 /// Maximum number of symbolic links that can be reliably traversed in the
 /// resolution of a pathname in the absence of a loop. The stafeto file

@@ -48,9 +48,9 @@ unsafe extern "C" {
     fn stafeto_thread_kill(id: c_int, sig: c_int) -> c_int;
 }
 
-/// The real-time timer of the process (the alarm), the one interval timer
-/// there is: ITIMER_VIRTUAL and ITIMER_PROF count processor time, which the
-/// kernel does not account (EINVAL).
+/// The real-time timer of the process (the alarm) is the service's; the
+/// timers on processor time, ITIMER_VIRTUAL and ITIMER_PROF, are the
+/// library's (time/thread_timer.rs), both counting the time the process ran.
 #[expect(deprecated)]
 fn itimer(
     which: c_int,
@@ -59,11 +59,17 @@ fn itimer(
     interval_ns: u64,
     old: Option<&mut itimerval>,
 ) -> Result<()> {
-    if which != 0 {
+    if !(0..=2).contains(&which) {
         return Err(Errno(crate::header::errno::EINVAL));
     }
     let mut before = [0u64; 2];
-    ret(unsafe { stafeto_alarm(c_int::from(set), value_ns, interval_ns, before.as_mut_ptr()) })?;
+    if which == 0 {
+        ret(unsafe {
+            stafeto_alarm(c_int::from(set), value_ns, interval_ns, before.as_mut_ptr())
+        })?;
+    } else {
+        before = crate::header::time::interval_timer(which, set, value_ns, interval_ns)?;
+    }
     if let Some(old) = old {
         // Microseconds rounded up: a timer with any time left shows some.
         let split = |ns: u64| {

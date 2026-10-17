@@ -7,20 +7,26 @@ use core::{
 use crate::{
     error::{Errno, Result},
     header::{
-        errno::{EINVAL, ETIMEDOUT},
+        errno::{EDEADLK, EINVAL, ETIMEDOUT},
         time::{CLOCK_MONOTONIC, CLOCK_REALTIME, timespec, timespec_realtime_to_monotonic},
     },
-    platform::types::clockid_t,
+    platform::{Pal, Sys, types::clockid_t},
     pthread::Pshared,
 };
 
 pub struct InnerRwLock {
     state: AtomicU32,
+    /// The thread that holds the lock for writing, else 0: a writer that
+    /// asks again is EDEADLK.
+    writer: AtomicU32,
 }
 // PTHREAD_RWLOCK_INITIALIZER is defined as "all zeroes".
 
 const WAITING_WR: u32 = 1 << (u32::BITS - 1);
-const COUNT_MASK: u32 = WAITING_WR - 1;
+/// The lock was made to prefer writers (PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP):
+/// a reader waits while a writer does.
+const PREFER_WR: u32 = 1 << (u32::BITS - 2);
+const COUNT_MASK: u32 = PREFER_WR - 1;
 const EXCLUSIVE: u32 = COUNT_MASK;
 
 // TODO: Optimize for short waits and long waits, using AtomicLock::wait_until, but still
@@ -31,7 +37,16 @@ impl InnerRwLock {
     pub const fn new(_pshared: Pshared) -> Self {
         Self {
             state: AtomicU32::new(0),
+            writer: AtomicU32::new(0),
         }
+    }
+    /// A lock that prefers writers when `prefer_writers`.
+    pub const fn with_kind(pshared: Pshared, prefer_writers: bool) -> Self {
+        let mut lock = Self::new(pshared);
+        if prefer_writers {
+            lock.state = AtomicU32::new(PREFER_WR);
+        }
+        lock
     }
     fn translate_timeout(deadline: Option<(&timespec, i32)>) -> Result<Option<timespec>, Errno> {
         let relative = match deadline {
@@ -49,13 +64,27 @@ impl InnerRwLock {
         &self,
         deadline: Option<(&timespec, clockid_t)>,
     ) -> Result<(), Errno> {
+        let me = Sys::gettid() as u32;
+        // The lock held already by this thread for writing: a thread that
+        // asks again would wait for itself.
+        if self.state.load(Ordering::Relaxed) & COUNT_MASK == EXCLUSIVE
+            && self.writer.load(Ordering::Relaxed) == me
+        {
+            return Err(Errno(EDEADLK));
+        }
+        // A lock that can be had at once is had, whatever the time.
+        if self.try_acquire_write_lock().is_ok() {
+            self.writer.store(me, Ordering::Relaxed);
+            return Ok(());
+        }
         let relative = Self::translate_timeout(deadline)?;
+        let kind = self.state.load(Ordering::Relaxed) & PREFER_WR;
         let mut waiting_wr = self.state.load(Ordering::Relaxed) & WAITING_WR;
 
         loop {
             match self.state.compare_exchange_weak(
-                waiting_wr,
-                EXCLUSIVE,
+                waiting_wr | kind,
+                EXCLUSIVE | kind,
                 Ordering::Acquire,
                 Ordering::Relaxed,
             ) {
@@ -89,9 +118,13 @@ impl InnerRwLock {
             }
         }
 
+        self.writer.store(me, Ordering::Relaxed);
         Ok(())
     }
     pub fn acquire_read_lock(&self, deadline: Option<(&timespec, clockid_t)>) -> Result<(), Errno> {
+        if self.try_acquire_read_lock().is_ok() {
+            return Ok(());
+        }
         let relative = Self::translate_timeout(deadline)?;
         while let Err(old) = self.try_acquire_read_lock() {
             if crate::sync::futex_wait(&self.state, old, relative.as_ref())
@@ -108,6 +141,12 @@ impl InnerRwLock {
 
         loop {
             let waiting_wr = cached & WAITING_WR;
+            let kind = cached & PREFER_WR;
+            // A lock that prefers writers keeps readers out while a writer
+            // waits.
+            if kind != 0 && waiting_wr != 0 {
+                return Err(cached);
+            }
             let old = if cached & COUNT_MASK == EXCLUSIVE {
                 0
             } else {
@@ -123,8 +162,8 @@ impl InnerRwLock {
             );
 
             match self.state.compare_exchange_weak(
-                (old & COUNT_MASK) | waiting_wr,
-                new | waiting_wr,
+                (old & COUNT_MASK) | waiting_wr | kind,
+                new | waiting_wr | kind,
                 Ordering::Acquire,
                 Ordering::Relaxed,
             ) {
@@ -140,16 +179,21 @@ impl InnerRwLock {
         }
     }
     pub fn try_acquire_write_lock(&self) -> Result<(), u32> {
+        let kind = self.state.load(Ordering::Relaxed) & PREFER_WR;
         let mut waiting_wr = self.state.load(Ordering::Relaxed) & WAITING_WR;
 
         loop {
             match self.state.compare_exchange_weak(
-                waiting_wr,
-                EXCLUSIVE,
+                waiting_wr | kind,
+                EXCLUSIVE | kind,
                 Ordering::Acquire,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => return Ok(()),
+                Ok(_) => {
+                    self.writer
+                        .store(Sys::gettid() as u32, Ordering::Relaxed);
+                    return Ok(());
+                }
                 Err(actual) if actual & COUNT_MASK > 0 => return Err(actual),
                 Err(can_retry) => {
                     waiting_wr = can_retry & WAITING_WR;
@@ -166,10 +210,11 @@ impl InnerRwLock {
 
         if state & COUNT_MASK == EXCLUSIVE {
             // Unlocking a write lock.
+            self.writer.store(0, Ordering::Relaxed);
 
             // This discards the writer-waiting bit, in order to ensure some level of fairness
             // between read and write locks.
-            self.state.store(0, Ordering::Release);
+            self.state.store(state & PREFER_WR, Ordering::Release);
 
             let _ = crate::sync::futex_wake(&self.state, i32::MAX);
         } else {
