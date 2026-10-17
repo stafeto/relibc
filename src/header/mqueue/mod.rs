@@ -92,10 +92,12 @@ pub unsafe extern "C" fn mq_close(mqdes: mqd_t) -> c_int {
     if let Err(errno) = ipc::ipc_fd(mqdes, ipc::op::MQ_GETATTR, &[0], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE) {
         return fail(errno);
     }
-    // The close removes the registration for notice that was made with it
-    // (the service takes off only the registration of this descriptor), also
-    // when a child of `fork` still holds a copy of the descriptor.
-    let _ = ipc::ipc_fd(mqdes, ipc::op::MQ_NOTIFY, &[0, 0], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE);
+    // The close removes the registration for notice that this process made
+    // with the descriptor, also when a child of `fork` still holds a copy of
+    // it; a child that closes its copy leaves its parent's registration.
+    if registered_here(mqdes, false) {
+        let _ = ipc::ipc_fd(mqdes, ipc::op::MQ_NOTIFY, &[0, 0], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE);
+    }
     close(mqdes)
 }
 
@@ -304,6 +306,38 @@ struct Watch {
     process: c_int,
 }
 
+/// The descriptors this process has registered for notice, and the process
+/// that made the entries (a child of `fork` has the parent's memory and none
+/// of its registrations).
+static REGISTERED: [core::sync::atomic::AtomicI32; 16] =
+    [const { core::sync::atomic::AtomicI32::new(-1) }; 16];
+static REGISTERED_BY: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+
+/// Notes (`add`) or looks up and forgets (not `add`) a registration of this
+/// process for `mqdes`; whether there was one.
+fn registered_here(mqdes: mqd_t, add: bool) -> bool {
+    let me = getpid();
+    if REGISTERED_BY.swap(me, Ordering::SeqCst) != me {
+        for slot in &REGISTERED {
+            slot.store(-1, Ordering::SeqCst);
+        }
+    }
+    if add {
+        for slot in &REGISTERED {
+            if slot
+                .compare_exchange(-1, mqdes, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    REGISTERED
+        .iter()
+        .any(|slot| slot.compare_exchange(mqdes, -1, Ordering::SeqCst, Ordering::SeqCst).is_ok())
+}
+
 /// The notices the watchers of this process have given.
 static DELIVERED: AtomicU32 = AtomicU32::new(0);
 
@@ -324,6 +358,7 @@ extern "C" fn watcher(arg: *mut core::ffi::c_void) -> *mut core::ffi::c_void {
         ipc::NO_DEADLINE,
     );
     WATCHES.fetch_sub(1, Ordering::Relaxed);
+    registered_here(watch.mqdes, false);
     // 1: a message came to the empty queue; the wait of another end (the
     // registration was removed, the queue closed) sends nothing.
     if matches!(answer, Ok(reply) if reply.words[0] == 1) {
@@ -345,7 +380,10 @@ pub unsafe extern "C" fn mq_notify(mqdes: mqd_t, notification: *const sigevent) 
     let mut out = [0u8; 0];
     if notification.is_null() {
         return match ipc::ipc_fd(mqdes, ipc::op::MQ_NOTIFY, &[0, 0], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE) {
-            Ok(_) => 0,
+            Ok(_) => {
+                registered_here(mqdes, false);
+                0
+            }
             Err(errno) => fail(errno),
         };
     }
@@ -361,6 +399,7 @@ pub unsafe extern "C" fn mq_notify(mqdes: mqd_t, notification: *const sigevent) 
     if let Err(errno) = ipc::ipc_fd(mqdes, ipc::op::MQ_NOTIFY, &[0, 1], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE) {
         return fail(errno);
     }
+    registered_here(mqdes, true);
     let watch = Box::into_raw(Box::new(Watch {
         mqdes,
         notify: event.sigev_notify,
@@ -382,6 +421,7 @@ pub unsafe extern "C" fn mq_notify(mqdes: mqd_t, notification: *const sigevent) 
     if made != 0 {
         drop(unsafe { Box::from_raw(watch) });
         WATCHES.fetch_sub(1, Ordering::Relaxed);
+        registered_here(mqdes, false);
         let _ = ipc::ipc_fd(mqdes, ipc::op::MQ_NOTIFY, &[0, 0], ipc::NO_CRED, &[], &mut out, ipc::NO_DEADLINE);
         return fail(made);
     }

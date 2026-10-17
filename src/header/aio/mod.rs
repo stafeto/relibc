@@ -444,7 +444,7 @@ pub unsafe extern "C" fn lio_listio(
         return fail(EINVAL);
     }
     if nent > AIO_MAX {
-        return fail(EAGAIN);
+        return fail(EINVAL);
     }
     let group = if mode == LIO_NOWAIT && !sig.is_null() {
         Box::into_raw(Box::new(Group {

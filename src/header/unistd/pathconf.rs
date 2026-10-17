@@ -71,7 +71,8 @@ fn pc(name: c_int) -> c_long {
         _PC_CHOWN_RESTRICTED => 1,
         _PC_NO_TRUNC => 1,
         _PC_VDISABLE => _POSIX_VDISABLE.into(),
-        _PC_SYNC_IO => 1,
+        // Synchronized I/O is not claimed (_POSIX_SYNCHRONIZED_IO).
+        _PC_SYNC_IO => -1,
         _PC_ASYNC_IO => 1,
         _PC_PRIO_IO => -1,
         _PC_SOCK_MAXBUF => -1,

@@ -200,8 +200,13 @@ pub fn getoverrun(id: timer_t) -> Option<c_int> {
 
 pub fn delete(id: timer_t) -> Option<()> {
     let timer = timer_of(id)?;
+    // The helper looks at `gone` under this lock and frees the timer after
+    // it, so the flag and the wake-up are made while the lock is held; the
+    // timer is not touched after the lock is let go.
+    let inner = timer.inner.lock();
     timer.gone.store(true, Ordering::Release);
     changed(timer);
+    drop(inner);
     Some(())
 }
 
