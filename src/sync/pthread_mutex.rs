@@ -134,11 +134,13 @@ impl RlctMutex {
         }
         let state = self.protocol.load(Ordering::Relaxed);
         if state & NOT_RECOVERABLE != 0 {
+            self.recursive_count.store(0, Ordering::Relaxed);
             self.release_word();
             return Err(Errno(ENOTRECOVERABLE));
         }
         let count = HELD_COUNT.get();
         if count == HELD_MAX {
+            self.recursive_count.store(0, Ordering::Relaxed);
             self.release_word();
             return Err(Errno(EAGAIN));
         }

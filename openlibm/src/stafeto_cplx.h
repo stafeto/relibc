@@ -5,8 +5,10 @@
  * The complex functions of C99 and C11 Annex G are computed in binary128
  * (long double), and the double and float functions round that result once.
  * binary128 leaves sixty guard bits for a double result, so the rounding is
- * correct except in cases of about 2^-60 probability, and the sums and
- * differences that cancel in the textbook formulas lose nothing that shows.
+ * correct in all but about one case in 2^60 for the functions whose formulas
+ * do not cancel; clog and cpow near the unit circle use log1pl of a sum
+ * formed without cancelling. The long double functions overflow early near
+ * LDBL_MAX (the formulas form 1 +- u and hypotl).
  * The identities of Annex G (casin, catan, ccos, csin and ctan from the
  * hyperbolic functions) give the functions they define.
  */

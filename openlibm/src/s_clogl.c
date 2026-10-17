@@ -33,8 +33,15 @@ clogl(long double complex z)
 	if (ax == 0)
 		re = -INFINITY;
 	else {
-		t = ay / ax;
-		re = logl(ax) + log1pl(t * t) / 2;
+		if (ax >= 0.5L && ax <= 1.5L && ay <= 1.5L)
+			/* Near the unit circle x*x + y*y - 1 is formed without
+			 * cancelling: (ax - 1) and (ax + 1) multiply exactly for
+			 * a double, and log1pl keeps the small result. */
+			re = log1pl((ax - 1) * (ax + 1) + ay * ay) / 2;
+		else {
+			t = ay / ax;
+			re = logl(ax) + log1pl(t * t) / 2;
+		}
 	}
 	return CMPLXL(re, atan2l(y, x));
 }

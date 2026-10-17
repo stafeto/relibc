@@ -236,7 +236,7 @@ pub unsafe extern "C" fn posix_typed_mem_open(
     tflag: c_int,
 ) -> c_int {
     let pools = POSIX_TYPED_MEM_ALLOCATE | POSIX_TYPED_MEM_ALLOCATE_CONTIG | POSIX_TYPED_MEM_MAP_ALLOCATABLE;
-    if name.is_null() || tflag & !pools != 0 || oflag & !(fcntl::O_ACCMODE | fcntl::O_CLOEXEC) != 0 {
+    if name.is_null() || tflag & !pools != 0 || tflag.count_ones() > 1 || oflag & !(fcntl::O_ACCMODE | fcntl::O_CLOEXEC) != 0 {
         ERRNO.set(errno::EINVAL);
     } else {
         ERRNO.set(errno::ENOENT);
