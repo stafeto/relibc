@@ -82,13 +82,15 @@ pub unsafe extern "C" fn pthread_key_create(
     key_ptr: *mut pthread_key_t,
     destructor: Dtor,
 ) -> c_int {
+    let mut keys = KEYS.lock();
+    // The keys at a time are limited (EAGAIN): each takes memory in every
+    // thread that sets it.
+    if keys.len() >= crate::header::limits::PTHREAD_KEYS_MAX as usize {
+        return crate::header::errno::EAGAIN;
+    }
     let key = NEXTKEY.fetch_add(1, Ordering::SeqCst) as pthread_key_t;
-
-    // TODO
-    //if key >= PTHREAD_KEYS_MAX {
-    //}
-
-    KEYS.lock().insert(key, destructor);
+    keys.insert(key, destructor);
+    drop(keys);
 
     unsafe { key_ptr.write(key) };
     0

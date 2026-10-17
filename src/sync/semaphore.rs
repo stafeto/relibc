@@ -86,11 +86,11 @@ impl Semaphore {
         }
     }
     /// What a wait by address says for the semaphore: a changed count
-    /// (EAGAIN) or an interruption (EINTR) means look again; only the
+    /// (EAGAIN) means look again; an interruption by a handler (EINTR), the
     /// deadline (ETIMEDOUT) and real errors end the wait.
     fn waited(result: Result<()>) -> Result<()> {
         match result {
-            Err(Errno(errno::EAGAIN | errno::EINTR)) => Ok(()),
+            Err(Errno(errno::EAGAIN)) => Ok(()),
             other => other,
         }
     }
