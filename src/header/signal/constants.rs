@@ -146,8 +146,11 @@ pub const SIGSTKSZ: usize = 8096;
 #[cfg(stafeto)]
 pub const MINSIGSTKSZ: usize = 12288;
 /// Default size in bytes for the alternate signal stack.
+/// A handler on it may start a program (exec, posix_spawn): the layer's
+/// frames for a table of 64 descriptors need about 36 KiB with the signal
+/// frame, so 48 KiB leaves room.
 #[cfg(stafeto)]
-pub const SIGSTKSZ: usize = 32768;
+pub const SIGSTKSZ: usize = 49152;
 
 /// Signal sent by `sigqueue()`.
 pub const SI_QUEUE: i32 = -1;
