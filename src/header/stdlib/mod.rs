@@ -117,7 +117,6 @@ pub unsafe extern "C" fn a64l(s: *const c_char) -> c_long {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/abort.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn abort() -> ! {
-    log::error!("Abort");
     // stafeto: SIGABRT through the platform runs a handler or ends the
     // process with status 134; when a handler returns, the process ends
     // with that status all the same.
@@ -784,9 +783,18 @@ pub unsafe extern "C" fn mbtowc(pwc: *mut wchar_t, s: *const c_char, n: size_t) 
     (unsafe { mbrtowc(pwc, s, n, &raw mut state) }) as c_int
 }
 
+/// What one try of a temporary name came to.
+enum Tried<T> {
+    Made(T),
+    /// The name exists: the next name is tried.
+    Taken,
+    /// Any other error: the search ends with the errno the try left.
+    Failed,
+}
+
 fn inner_mktemp<T, F>(name: *mut c_char, suffix_len: c_int, mut attempt: F) -> Option<T>
 where
-    F: FnMut() -> Option<T>,
+    F: FnMut() -> Tried<T>,
 {
     let len = unsafe { c_int::try_from(strlen(name)).expect("name unlikely to exceed c_int::MAX") };
 
@@ -825,8 +833,10 @@ where
             }
         }
 
-        if let result @ Some(_) = attempt() {
-            return result;
+        match attempt() {
+            Tried::Made(result) => return Some(result),
+            Tried::Taken => {}
+            Tried::Failed => return None,
         }
     }
 
@@ -918,8 +928,12 @@ pub unsafe extern "C" fn mkdtemp(name: *mut c_char) -> *mut c_char {
     inner_mktemp(name, 0, || {
         let name_c = unsafe { CStr::from_ptr(name) };
         match Sys::mkdir(name_c, 0o700) {
-            Ok(()) => Some(name),
-            Err(_) => None,
+            Ok(()) => Tried::Made(name),
+            Err(Errno(code)) if code == errno::EEXIST => Tried::Taken,
+            Err(Errno(code)) => {
+                platform::ERRNO.set(code);
+                Tried::Failed
+            }
         }
     })
     .unwrap_or(ptr::null_mut())
@@ -947,7 +961,13 @@ pub unsafe extern "C" fn mkostemps(
         let name = unsafe { CStr::from_ptr(name) };
         let fd = Sys::open(name, flags, 0o600).or_minus_one_errno();
 
-        if fd >= 0 { Some(fd) } else { None }
+        if fd >= 0 {
+            Tried::Made(fd)
+        } else if platform::ERRNO.get() == errno::EEXIST {
+            Tried::Taken
+        } else {
+            Tried::Failed
+        }
     })
     .unwrap_or(-1)
 }
@@ -975,9 +995,9 @@ pub unsafe extern "C" fn mktemp(name: *mut c_char) -> *mut c_char {
     if inner_mktemp(name, 0, || {
         let name = unsafe { CStr::from_ptr(name) };
         if Sys::access(name, 0) == Err(Errno(ENOENT)) {
-            Some(())
+            Tried::Made(())
         } else {
-            None
+            Tried::Taken
         }
     })
     .is_none()
