@@ -225,6 +225,9 @@ unsafe extern "C" {
     /// The part of `stafeto_cpu_ns(who)` spent in the kernel, or a negated
     /// errno.
     fn stafeto_cpu_system_ns(who: c_int) -> i64;
+    /// The user and the system time of `who` as `stafeto_cpu_ns` says, in
+    /// nanoseconds, from one reading, or a negated errno.
+    fn stafeto_cpu_split_ns(who: c_int, user: *mut u64, system: *mut u64) -> c_int;
     /// The id of the CPU-time clock of thread `tid`.
     fn stafeto_thread_cpu_clock(tid: c_int) -> c_int;
     /// 20 minus the nice value of the processes `which` and `who` name, or
@@ -382,7 +385,7 @@ fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 20;
+const PLATFORM_INTERFACE: u64 = 21;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -546,14 +549,14 @@ pub(crate) fn cpu_ns(who: c_int) -> Result<u64> {
     ret(unsafe { stafeto_cpu_ns(who) } as isize).map(|v| v as u64)
 }
 
-/// The user and the system time in nanoseconds of what `who` says: the system
-/// time is what the layer counts in the kernel, the user time is the rest of
-/// the whole.
+/// The user and the system time in nanoseconds of what `who` says: the time
+/// the layer counts outside the kernel and in it, from one reading, so that
+/// the time the kernel counts between two readings cannot move from the user
+/// part to the system part.
 pub(crate) fn cpu_split_ns(who: c_int) -> Result<(u64, u64)> {
-    let total = cpu_ns(who)?;
-    let system = ret(unsafe { stafeto_cpu_system_ns(who) } as isize).map(|v| v as u64)?;
-    let system = system.min(total);
-    Ok((total - system, system))
+    let (mut user, mut system) = (0u64, 0u64);
+    ret(unsafe { stafeto_cpu_split_ns(who, &raw mut user, &raw mut system) } as isize)?;
+    Ok((user, system))
 }
 
 /// The id of the CPU-time clock of thread `os_tid`.
