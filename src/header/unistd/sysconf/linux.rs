@@ -306,8 +306,15 @@ pub(super) fn sysconf_impl(name: c_int) -> c_long {
         _SC_THREAD_PRIO_INHERIT => -1,
         _SC_THREAD_PRIO_PROTECT => -1,
         _SC_THREAD_PROCESS_SHARED => _POSIX_VERSION,
+        // stafeto: the CPUs the kernel runs (object_info CPU).
+        #[cfg(stafeto)]
+        _SC_NPROCESSORS_CONF | _SC_NPROCESSORS_ONLN => {
+            c_long::from(crate::platform::Sys::cpu_count())
+        }
         // TODO: Use getaffinity syscall on Linux
+        #[cfg(not(stafeto))]
         _SC_NPROCESSORS_CONF => -1,
+        #[cfg(not(stafeto))]
         _SC_NPROCESSORS_ONLN => -1,
         // TODO: sysinfo
         _SC_PHYS_PAGES => -1,

@@ -28,7 +28,10 @@ typedef struct cpu_set_t cpu_set_t;
 #define CPU_ISSET(cpu, set) \\
     ((((const unsigned long *)(set))[(cpu) / (8 * sizeof(unsigned long))] >> ((cpu) % (8 * sizeof(unsigned long)))) & 1UL)
 #define CPU_COUNT(set) \\
-    (__builtin_popcountl(((const unsigned long *)(set))[0]))
+    ({ int __n = 0; \\
+       for (int __i = 0; __i < CPU_SETSIZE / (8 * (int)sizeof(unsigned long)); __i++) \\
+           __n += __builtin_popcountl(((const unsigned long *)(set))[__i]); \\
+       __n; })
 """
 language = "C"
 style = "Tag"

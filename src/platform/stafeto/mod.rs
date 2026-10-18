@@ -121,6 +121,16 @@ unsafe extern "C" {
     /// negated errno (EINVAL, EPERM, ESRCH). The thread goes to the tail of
     /// its level (XSH 2.8.4).
     fn stafeto_sched_set(pid: pid_t, policy: c_int, priority: c_int) -> c_int;
+    /// The CPUs that are up, at least 1.
+    fn stafeto_cpu_count() -> c_int;
+    /// The CPU the calling thread runs on.
+    fn stafeto_cpu_current() -> c_int;
+    /// The mask of the process `pid` into `size` bytes at `mask`: 0 or a
+    /// negated errno (EINVAL, ESRCH, EPERM).
+    fn stafeto_sched_getaffinity(pid: pid_t, size: usize, mask: *mut u8) -> c_int;
+    /// The mask of the process `pid` from `size` bytes at `mask`: 0 or a
+    /// negated errno (EINVAL, ESRCH, EPERM).
+    fn stafeto_sched_setaffinity(pid: pid_t, size: usize, mask: *const u8) -> c_int;
     /// The policy and priority of thread `tid`: 0 or a negated errno.
     fn stafeto_thread_sched_get(tid: c_int, policy: *mut c_int, priority: *mut c_int) -> c_int;
     /// `policy` (negative: keep it) and `priority` for thread `tid`
@@ -695,6 +705,24 @@ impl Sys {
     pub fn sched_getparam(pid: pid_t) -> Result<c_int> {
         let mut priority = 0;
         ret(unsafe { stafeto_sched_getparam(pid, &raw mut priority) } as isize).map(|_| priority)
+    }
+
+    /// The CPUs that are up.
+    pub fn cpu_count() -> c_int {
+        unsafe { stafeto_cpu_count() }
+    }
+
+    /// The CPU the calling thread runs on.
+    pub fn cpu_current() -> c_int {
+        unsafe { stafeto_cpu_current() }
+    }
+
+    pub fn sched_getaffinity(pid: pid_t, size: usize, mask: *mut u8) -> Result<c_int> {
+        ret(unsafe { stafeto_sched_getaffinity(pid, size, mask) } as isize).map(|v| v as c_int)
+    }
+
+    pub fn sched_setaffinity(pid: pid_t, size: usize, mask: *const u8) -> Result<c_int> {
+        ret(unsafe { stafeto_sched_setaffinity(pid, size, mask) } as isize).map(|v| v as c_int)
     }
 
     pub fn sched_set(pid: pid_t, policy: c_int, priority: c_int) -> Result<c_int> {

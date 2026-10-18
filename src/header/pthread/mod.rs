@@ -316,6 +316,46 @@ pub unsafe extern "C" fn pthread_setschedprio(thread: pthread_t, prio: c_int) ->
     ))
 }
 
+/// glibc's `pthread_setaffinity_np`. stafeto keeps one mask for the whole
+/// process (`sched_setaffinity`): the threads made after the call go where it
+/// allows.
+///
+/// # Safety
+/// `mask` points to `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_setaffinity_np(
+    _thread: pthread_t,
+    size: size_t,
+    mask: *const crate::header::sched::cpu_set_t,
+) -> c_int {
+    if mask.is_null() || size == 0 {
+        return crate::header::errno::EFAULT;
+    }
+    match crate::platform::Sys::sched_setaffinity(0, size, mask.cast()) {
+        Ok(_) => 0,
+        Err(Errno(error)) => error,
+    }
+}
+
+/// glibc's `pthread_getaffinity_np`: the mask of the process.
+///
+/// # Safety
+/// `mask` points to `size` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pthread_getaffinity_np(
+    _thread: pthread_t,
+    size: size_t,
+    mask: *mut crate::header::sched::cpu_set_t,
+) -> c_int {
+    if mask.is_null() || size == 0 {
+        return crate::header::errno::EFAULT;
+    }
+    match crate::platform::Sys::sched_getaffinity(0, size, mask.cast()) {
+        Ok(_) => 0,
+        Err(Errno(error)) => error,
+    }
+}
+
 pub mod spin;
 pub use self::spin::*;
 
