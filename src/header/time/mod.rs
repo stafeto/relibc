@@ -24,10 +24,10 @@ use crate::{
 };
 use alloc::collections::BTreeSet;
 use chrono::{
-    DateTime, Datelike, NaiveDate, NaiveDateTime, Offset, TimeZone, Timelike, Utc,
+    DateTime, Datelike, NaiveDate, Offset, TimeZone, Timelike, Utc,
     offset::MappedLocalTime,
 };
-use chrono_tz::{OffsetComponents, OffsetName, Tz};
+use self::tzfile::Tz;
 use core::{cell::OnceCell, convert::TryFrom, mem, ptr};
 
 pub use crate::header::bits_timespec::timespec;
@@ -39,6 +39,7 @@ pub mod constants;
 mod posix_tz;
 mod strftime;
 mod strptime;
+mod tzfile;
 #[cfg(stafeto)]
 mod thread_timer;
 #[cfg(stafeto)]
@@ -495,10 +496,10 @@ pub unsafe extern "C" fn localtime_r(timer: *const time_t, result: *mut tm) -> *
     // SAFETY: the caller is required to ensure that `daylight`, `timezone`
     // and `tzname` are not accessed by user code.
     unsafe { clear_timezone(&mut lock) };
-    if let (Some(std_time), dst_time) = get_localtime(timer_val, result_out) {
+    if let Some(tz) = get_localtime(timer_val, result_out) {
         // SAFETY: the caller is required to ensure that `daylight`,
         // `timezone` and `tzname` are not accessed by user code.
-        unsafe { set_timezone(&mut lock, &std_time, dst_time) };
+        unsafe { set_timezone(&mut lock, tz) };
     }
     result
 }
@@ -545,16 +546,7 @@ pub unsafe extern "C" fn mktime(timeptr: *mut tm) -> time_t {
 
             unsafe { ptr::write(timeptr, datetime_to_tm(&tz_datetime)) };
 
-            // Convert UTC time to local time
-            let (std_time, dst_time) = match tz.timestamp_opt(timestamp, 0) {
-                MappedLocalTime::Single(t) => (t, None),
-                // This variant contains the two possible results, in the order (earliest, latest).
-                MappedLocalTime::Ambiguous(t1, t2) => (t2, Some(t1)),
-                MappedLocalTime::None => return timestamp,
-            };
-            {
-                unsafe { set_timezone(&mut lock, &std_time, dst_time) };
-            }
+            unsafe { set_timezone(&mut lock, tz) };
 
             timestamp
         }
@@ -657,12 +649,12 @@ pub unsafe extern "C" fn timegm(tm: *mut tm) -> time_t {
 pub unsafe extern "C" fn timelocal(tm: *mut tm) -> time_t {
     let tm_val = unsafe { &mut *tm };
     // POSIX TODO
-    let tz = time_zone().unwrap_or(Tz::UTC);
+    let tz = time_zone().unwrap_or_else(Tz::utc);
     let Some(dt) = convert_tm_generic(&tz, tm_val) else {
         return -1;
     };
 
-    let tz_name = CString::new(tz.name()).unwrap();
+    let tz_name = CString::new(dt.offset().abbreviation()).unwrap();
     #[cfg(target_pointer_width = "64")]
     let tm_gmtoff = dt.offset().fix().local_minus_utc().into();
     #[cfg(target_pointer_width = "32")]
@@ -670,7 +662,7 @@ pub unsafe extern "C" fn timelocal(tm: *mut tm) -> time_t {
     unsafe {
         (*tm).tm_wday = dt.weekday().num_days_from_sunday() as _;
         (*tm).tm_yday = dt.ordinal0() as _; // day of year starting at 0
-        (*tm).tm_isdst = dt.offset().dst_offset().num_hours() as _;
+        (*tm).tm_isdst = c_int::from(dt.offset().is_dst());
         (*tm).tm_gmtoff = tm_gmtoff;
         (*tm).tm_zone = tz_name.into_raw().cast();
     }
@@ -819,18 +811,9 @@ pub unsafe extern "C" fn tzset() {
 
     match tz_option {
         Some(tz) => {
-            // IANA
-            let datetime = now();
-            let (std_time, dst_time) = match tz.from_local_datetime(&datetime) {
-                MappedLocalTime::Single(t) => (t, None),
-                // This variant contains the two possible results, in the order (earliest, latest).
-                MappedLocalTime::Ambiguous(t1, t2) => (t2, Some(t1)),
-                MappedLocalTime::None => return,
-            };
-
             // SAFETY: the caller is required to ensure that `daylight`, `timezone`
             // and `tzname` are not accessed by user code.
-            unsafe { set_timezone(&mut lock, &std_time, dst_time) }
+            unsafe { set_timezone(&mut lock, tz) }
         }
         None => {
             // POSIX
@@ -931,42 +914,24 @@ fn get_current_time_zone<'a>() -> &'a str {
 
 #[inline(always)]
 fn time_zone() -> Option<Tz> {
-    get_current_time_zone().parse().ok() //.unwrap_or(Tz::UTC)
+    Tz::named(get_current_time_zone())
 }
 
 #[inline(always)]
-fn now() -> NaiveDateTime {
-    let mut now = timespec::default();
-    if Sys::clock_gettime(CLOCK_REALTIME, Out::from_mut(&mut now)).is_ok() {}; // TODO what to do if Err?
-    DateTime::from_timestamp(now.tv_sec, now.tv_nsec as _)
-        .unwrap_or_default()
-        .naive_local()
-}
-
-#[inline(always)]
-fn get_localtime(
-    timer: time_t,
-    mut result: Out<tm>,
-) -> (Option<DateTime<Tz>>, Option<DateTime<Tz>>) {
+fn get_localtime(timer: time_t, mut result: Out<tm>) -> Option<Tz> {
     // POSIX TODO
-    let tz = time_zone().unwrap_or(Tz::UTC);
+    let tz = time_zone().unwrap_or_else(Tz::utc);
 
     // Convert UTC time to local time
-    let (std_time, dst_time) = match tz.timestamp_opt(timer, 0) {
-        MappedLocalTime::Single(t) => (Some(t), None),
-        // This variant contains the two possible results, in the order (earliest, latest).
-        MappedLocalTime::Ambiguous(t1, t2) => (Some(t2), Some(t1)),
-        MappedLocalTime::None => return (None, None),
+    let MappedLocalTime::Single(local) = tz.timestamp_opt(timer, 0) else {
+        return None;
     };
-
-    let localtime = datetime_to_tm(&std_time.unwrap());
-    result.write(localtime);
-    (std_time, dst_time)
+    result.write(datetime_to_tm(&local));
+    Some(tz)
 }
 
 fn datetime_to_tm(local_time: &DateTime<Tz>) -> tm {
-    let tz = local_time.timezone().name();
-    let tz = tz.strip_prefix("Etc/").unwrap_or(tz);
+    let tz = local_time.offset().abbreviation();
 
     let mut t = blank_tm();
     // Populate the `tm` structure
@@ -980,7 +945,7 @@ fn datetime_to_tm(local_time: &DateTime<Tz>) -> tm {
     t.tm_yday = local_time.ordinal0() as _; // 0-based day of year
 
     let offset = local_time.offset();
-    t.tm_isdst = offset.dst_offset().num_hours() as _;
+    t.tm_isdst = c_int::from(offset.is_dst());
     // Get the UTC offset in seconds
     #[cfg(target_pointer_width = "64")]
     let tm_gtoff = offset.fix().local_minus_utc().into();
@@ -1004,24 +969,17 @@ fn datetime_to_tm(local_time: &DateTime<Tz>) -> tm {
 /// The caller must ensure that `daylight`, `timezone` and `tzname` are not
 /// accessed by user code for the duration of the call (relibc functions are
 /// required to hold `TIMEZONE_LOCK` when accessing these).
-unsafe fn set_timezone(
-    guard: &mut MutexGuard<'_, (Option<CString>, Option<CString>)>,
-    std: &DateTime<Tz>,
-    dst: Option<DateTime<Tz>>,
-) {
+unsafe fn set_timezone(guard: &mut MutexGuard<'_, (Option<CString>, Option<CString>)>, tz: Tz) {
+    let (std, std_offset, dst) = tz.names();
     // SAFETY: the caller is required to ensure access exclusively for the
     // holder of `TIMEZONE_LOCK`.
     unsafe {
-        let ut_offset = std.offset();
-
-        guard.0 = Some(CString::new(ut_offset.abbreviation().expect("Wrong timezone")).unwrap());
+        guard.0 = Some(CString::new(std).unwrap());
         tzname.0[0] = guard.0.as_ref().unwrap().as_ptr().cast_mut();
 
         match dst {
             Some(dst) => {
-                guard.1 = Some(
-                    CString::new(dst.offset().abbreviation().expect("Wrong timezone")).unwrap(),
-                );
+                guard.1 = Some(CString::new(dst).unwrap());
                 tzname.0[1] = guard.1.as_ref().unwrap().as_ptr().cast_mut();
                 daylight = 1;
             }
@@ -1032,7 +990,7 @@ unsafe fn set_timezone(
             }
         }
 
-        timezone = -c_long::from(ut_offset.fix().local_minus_utc());
+        timezone = -c_long::from(std_offset);
     }
 }
 
