@@ -1137,8 +1137,13 @@ unsafe fn put_new_env(insert: *mut c_char) {
     // chance of a memory leak. But we can check if it was the same as before, like musl does.
     if unsafe { platform::environ } == unsafe { platform::OUR_ENVIRON.unsafe_mut().as_mut_ptr() } {
         {
+            // The list ends at its first null, which is not always the last
+            // element: the idiom of clearenv (`environ[0] = NULL`) ends it
+            // early and leaves the old elements behind.
+            let used = platform::environ_iter().count();
             let our_environ = unsafe { &mut *platform::OUR_ENVIRON.as_mut_ptr() };
-            *our_environ.last_mut().unwrap() = insert;
+            our_environ.truncate(used);
+            our_environ.push(insert);
             our_environ.push(core::ptr::null_mut());
         }
         // Likely a no-op but is needed due to Stacked Borrows.
