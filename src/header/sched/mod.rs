@@ -49,8 +49,7 @@ fn fail(error: c_int) -> c_int {
 /// The bits of a CPU set (glibc's `CPU_SETSIZE`).
 pub const CPU_SETSIZE: c_int = 1024;
 
-/// A set of CPUs (glibc's layout: 1024 bits). stafeto runs on one processor:
-/// the set of any thread is {0}.
+/// A set of CPUs (glibc's layout: 1024 bits).
 #[allow(non_camel_case_types)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
@@ -159,8 +158,11 @@ pub extern "C" fn sched_yield() -> c_int {
     Sys::sched_yield().map(|()| 0).or_minus_one_errno()
 }
 
-/// Linux's `sched_setaffinity`: one processor, so a mask that holds CPU 0
-/// is the only one accepted.
+/// Linux's `sched_setaffinity` on stafeto: the layer writes the mask to the
+/// process's page. The threads the process makes later and the image of its
+/// next exec go on the CPUs the mask names; a thread that runs stays on its
+/// CPU. EINVAL when the mask names no CPU that is up, ESRCH for a process
+/// that does not exist, EPERM for another process.
 ///
 /// # Safety
 /// `mask` points to `size` bytes.
@@ -173,17 +175,12 @@ pub unsafe extern "C" fn sched_setaffinity(
     if mask.is_null() || size == 0 {
         return fail(errno::EFAULT);
     }
-    if let Err(e) = Sys::sched_getscheduler(pid) {
-        return fail(e.0);
-    }
-    // SAFETY: the caller's promise; the first byte holds CPU 0.
-    if unsafe { *mask.cast::<u8>() } & 1 == 0 {
-        return fail(errno::EINVAL);
-    }
-    0
+    Sys::sched_setaffinity(pid, size, mask.cast()).map(|_| 0).or_minus_one_errno()
 }
 
-/// Linux's `sched_getaffinity`: the set {0}.
+/// Linux's `sched_getaffinity` on stafeto: the CPUs the process may use, all
+/// that are up unless it set a mask. The bytes past the CPUs are zeros;
+/// EINVAL when `size` holds fewer bits than there are CPUs.
 ///
 /// # Safety
 /// `mask` points to `size` bytes.
@@ -196,13 +193,11 @@ pub unsafe extern "C" fn sched_getaffinity(
     if mask.is_null() || size == 0 {
         return fail(errno::EFAULT);
     }
-    if let Err(e) = Sys::sched_getscheduler(pid) {
-        return fail(e.0);
-    }
-    // SAFETY: the caller's promise.
-    unsafe {
-        core::ptr::write_bytes(mask.cast::<u8>(), 0, size);
-        *mask.cast::<u8>() = 1;
-    }
-    0
+    Sys::sched_getaffinity(pid, size, mask.cast()).map(|_| 0).or_minus_one_errno()
+}
+
+/// glibc's `sched_getcpu`: the number of the CPU the calling thread runs on.
+#[unsafe(no_mangle)]
+pub extern "C" fn sched_getcpu() -> c_int {
+    Sys::cpu_current()
 }
