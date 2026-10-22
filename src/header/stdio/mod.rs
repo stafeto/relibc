@@ -1623,66 +1623,36 @@ pub unsafe extern "C" fn vfprintf(file: *mut FILE, format: *const c_char, ap: va
         return -1;
     }
 
-    // stafeto: a stream with no buffer (stderr) gets the text of one call
-    // with as few writes as it fills `Gather`, so that the line of a
-    // message does not come apart among the lines of other programs.
+    // stafeto: a stream with no buffer (stderr) holds the text of one call
+    // in a buffer of GATHER bytes while it is formatted, and writes it with
+    // as few writes as it fills, so that the line of a message does not come
+    // apart among the lines of other programs.
     if matches!(file.writer, FileInnerWriter::Unbuffered(_)) {
-        let mut gather = Gather::new(&mut *file);
-        let n = unsafe { printf::printf(&mut gather, CStr::from_ptr(format), ap) };
-        if gather.finish().is_err() {
-            return -1;
+        // SAFETY: the writer is taken out and put back at once; the zeroed
+        // stand-in is never used nor dropped.
+        let FileInnerWriter::Unbuffered(inner) =
+            core::mem::replace(&mut file.writer, unsafe { core::mem::zeroed() })
+        else {
+            unreachable!()
+        };
+        core::mem::forget(core::mem::replace(
+            &mut file.writer,
+            FileInnerWriter::Buf(BufWriter::with_capacity(GATHER, inner)),
+        ));
+        let mut n = unsafe { printf::printf(&mut *file, CStr::from_ptr(format), ap) };
+        if file.flush().is_err() {
+            n = -1;
         }
+        // SAFETY: as above.
+        let writer = core::mem::replace(&mut file.writer, unsafe { core::mem::zeroed() });
+        core::mem::forget(core::mem::replace(&mut file.writer, writer.to_unbuffered()));
         return n;
     }
     unsafe { printf::printf(&mut *file, CStr::from_ptr(format), ap) }
 }
 
-/// The bytes of one call of the printf family on a stream with no buffer, a
-/// `GATHER` at a time, on their way to the stream (vfprintf).
-struct Gather<W: Write> {
-    inner: W,
-    buf: [u8; GATHER],
-    len: usize,
-}
-
-/// The bytes `Gather` holds before it writes.
+/// The bytes a stream with no buffer holds for one call of vfprintf.
 const GATHER: usize = 512;
-
-impl<W: Write> Gather<W> {
-    fn new(inner: W) -> Self {
-        Gather {
-            inner,
-            buf: [0; GATHER],
-            len: 0,
-        }
-    }
-
-    /// Writes what it holds.
-    fn finish(&mut self) -> io::Result<()> {
-        let len = core::mem::take(&mut self.len);
-        self.inner.write_all(&self.buf[..len])
-    }
-}
-
-impl<W: Write> Write for Gather<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.len + buf.len() > GATHER {
-            self.finish()?;
-        }
-        if buf.len() >= GATHER {
-            self.inner.write_all(buf)?;
-        } else {
-            self.buf[self.len..self.len + buf.len()].copy_from_slice(buf);
-            self.len += buf.len();
-        }
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.finish()?;
-        self.inner.flush()
-    }
-}
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fprintf.html>.
 #[unsafe(no_mangle)]
