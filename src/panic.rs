@@ -4,8 +4,18 @@ use core::fmt::Write;
 pub extern "C" fn relibc_panic(pi: &::core::panic::PanicInfo) -> ! {
     use core::fmt::Write;
 
-    let mut w = PanicWriter::new();
-    let _ = w.write_fmt(format_args!("RELIBC PANIC: {}\n", pi));
+    // stafeto: the message goes out with one write.
+    #[cfg(stafeto)]
+    {
+        let mut w = crate::platform::MessageWriter::new(2);
+        let _ = w.write_fmt(format_args!("RELIBC PANIC: {}\n", pi));
+        let _ = w.finish();
+    }
+    #[cfg(not(stafeto))]
+    {
+        let mut w = PanicWriter::new();
+        let _ = w.write_fmt(format_args!("RELIBC PANIC: {}\n", pi));
+    }
 
     // stafeto has no SIGABRT yet: the process ends with the status a shell
     // reports for one (128 + 6).

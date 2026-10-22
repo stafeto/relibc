@@ -1146,17 +1146,21 @@ pub unsafe extern "C" fn perror(s: *const c_char) {
         } else {
             "Unknown error"
         };
-    let mut w = platform::FileWriter::new(2);
+    // One write for the whole message.
+    let mut w = platform::MessageWriter::new(2);
 
     // The prefix, `s`, is optional (empty or NULL) according to the spec
     match unsafe { CStr::from_nullable_ptr(s) }
         .and_then(|s_cstr| str::from_utf8(s_cstr.to_bytes()).ok())
     {
-        Some(s_str) if !s_str.is_empty() => w
-            .write_fmt(format_args!("{}: {}\n", s_str, err_str))
-            .unwrap(),
-        _ => w.write_fmt(format_args!("{}\n", err_str)).unwrap(),
+        Some(s_str) if !s_str.is_empty() => {
+            let _ = w.write_fmt(format_args!("{}: {}\n", s_str, err_str));
+        }
+        _ => {
+            let _ = w.write_fmt(format_args!("{}\n", err_str));
+        }
     }
+    let _ = w.finish();
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/popen.html>.
@@ -1619,7 +1623,65 @@ pub unsafe extern "C" fn vfprintf(file: *mut FILE, format: *const c_char, ap: va
         return -1;
     }
 
+    // stafeto: a stream with no buffer (stderr) gets the text of one call
+    // with as few writes as it fills `Gather`, so that the line of a
+    // message does not come apart among the lines of other programs.
+    if matches!(file.writer, FileInnerWriter::Unbuffered(_)) {
+        let mut gather = Gather::new(&mut *file);
+        let n = unsafe { printf::printf(&mut gather, CStr::from_ptr(format), ap) };
+        if gather.finish().is_err() {
+            return -1;
+        }
+        return n;
+    }
     unsafe { printf::printf(&mut *file, CStr::from_ptr(format), ap) }
+}
+
+/// The bytes of one call of the printf family on a stream with no buffer, a
+/// `GATHER` at a time, on their way to the stream (vfprintf).
+struct Gather<W: Write> {
+    inner: W,
+    buf: [u8; GATHER],
+    len: usize,
+}
+
+/// The bytes `Gather` holds before it writes.
+const GATHER: usize = 512;
+
+impl<W: Write> Gather<W> {
+    fn new(inner: W) -> Self {
+        Gather {
+            inner,
+            buf: [0; GATHER],
+            len: 0,
+        }
+    }
+
+    /// Writes what it holds.
+    fn finish(&mut self) -> io::Result<()> {
+        let len = core::mem::take(&mut self.len);
+        self.inner.write_all(&self.buf[..len])
+    }
+}
+
+impl<W: Write> Write for Gather<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.len + buf.len() > GATHER {
+            self.finish()?;
+        }
+        if buf.len() >= GATHER {
+            self.inner.write_all(buf)?;
+        } else {
+            self.buf[self.len..self.len + buf.len()].copy_from_slice(buf);
+            self.len += buf.len();
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.finish()?;
+        self.inner.flush()
+    }
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fprintf.html>.

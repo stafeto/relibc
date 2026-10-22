@@ -3,7 +3,7 @@
 macro_rules! print {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = $crate::platform::FileWriter::new(1).write_fmt(format_args!($($arg)*));
+        let _ = $crate::platform::MessageWriter::new(1).write_fmt(format_args!($($arg)*));
     }};
 }
 
@@ -24,7 +24,7 @@ macro_rules! println {
 macro_rules! eprint {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = $crate::platform::FileWriter::new(2).write_fmt(format_args!($($arg)*));
+        let _ = $crate::platform::MessageWriter::new(2).write_fmt(format_args!($($arg)*));
     }};
 }
 

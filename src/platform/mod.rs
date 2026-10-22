@@ -93,6 +93,65 @@ impl<W: WriteByte> WriteByte for &mut W {
     }
 }
 
+/// Formatted text for a file descriptor, gathered into one write of up to
+/// `MESSAGE_MAX` bytes (stafeto): a message of abort, assert, perror or a
+/// panic goes out with one call, so the lines other programs write to the
+/// same console do not come between its parts. Longer text goes out a
+/// `MESSAGE_MAX` at a time. `finish` writes what is left; so does drop.
+pub struct MessageWriter {
+    fd: c_int,
+    buf: [u8; MESSAGE_MAX],
+    len: usize,
+}
+
+/// The longest text `MessageWriter` writes with one call.
+pub const MESSAGE_MAX: usize = 512;
+
+impl MessageWriter {
+    pub const fn new(fd: c_int) -> Self {
+        Self {
+            fd,
+            buf: [0; MESSAGE_MAX],
+            len: 0,
+        }
+    }
+
+    /// Writes the gathered bytes, all of them unless a write fails.
+    pub fn finish(&mut self) -> fmt::Result {
+        let mut at = 0;
+        while at < self.len {
+            match Sys::write(self.fd, &self.buf[at..self.len]) {
+                Ok(0) | Err(_) => {
+                    self.len = 0;
+                    return Err(fmt::Error);
+                }
+                Ok(n) => at += n,
+            }
+        }
+        self.len = 0;
+        Ok(())
+    }
+}
+
+impl fmt::Write for MessageWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for &b in s.as_bytes() {
+            if self.len == MESSAGE_MAX {
+                self.finish()?;
+            }
+            self.buf[self.len] = b;
+            self.len += 1;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for MessageWriter {
+    fn drop(&mut self) {
+        let _ = self.finish();
+    }
+}
+
 /// An implementation of [`core::fmt::Write`] for a file descriptor.
 pub struct FileWriter(pub c_int, Option<Errno>);
 
