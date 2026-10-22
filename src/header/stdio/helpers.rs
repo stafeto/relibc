@@ -97,5 +97,6 @@ pub fn _fdopen(fd: c_int, mode: CStr) -> Result<Box<FILE>, Errno> {
         pid: None,
         orientation: 0,
         mem: None,
+        gather: core::ptr::null_mut(),
     }))
 }

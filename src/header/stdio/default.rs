@@ -38,6 +38,7 @@ impl GlobalFile {
 
             orientation: 0,
             mem: None,
+            gather: core::ptr::null_mut(),
         }))
     }
     pub const fn get(&self) -> *mut FILE {

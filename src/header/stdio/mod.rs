@@ -248,6 +248,38 @@ pub struct FILE {
 
     // A stream over memory (fmemopen, open_memstream) and where its buffer is
     pub(crate) mem: Option<memstream::MemKind>,
+
+    // stafeto: while vfprintf formats on a stream with no buffer, the
+    // buffer on its stack the text goes to (`Gather`); null otherwise.
+    pub(crate) gather: *mut Gather,
+}
+
+/// The text of one call of vfprintf on a stream with no buffer, on the
+/// stack of the call: no allocation on the way to stderr.
+pub(crate) struct Gather {
+    buf: [u8; GATHER],
+    len: usize,
+}
+
+/// The bytes a stream with no buffer holds for one call of vfprintf.
+const GATHER: usize = 512;
+
+impl FILE {
+    /// Writes what the gather buffer holds, if any, to the writer.
+    fn flush_gather(&mut self) -> io::Result<()> {
+        if self.gather.is_null() {
+            return Ok(());
+        }
+        // SAFETY: vfprintf sets the pointer to its own buffer while it
+        // runs, under the lock of the stream, and clears it before return.
+        let gather = unsafe { &mut *self.gather };
+        let len = core::mem::take(&mut gather.len);
+        if let Err(err) = self.writer.write_all(&gather.buf[..len]) {
+            self.flags |= F_ERR;
+            return Err(err);
+        }
+        Ok(())
+    }
 }
 
 impl Read for FILE {
@@ -300,6 +332,20 @@ impl BufRead for FILE {
 
 impl Write for FILE {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !self.gather.is_null() {
+            // SAFETY: as in `flush_gather`.
+            let room = GATHER - unsafe { (*self.gather).len };
+            if buf.len() > room {
+                self.flush_gather()?;
+            }
+            if buf.len() < GATHER {
+                // SAFETY: as in `flush_gather`.
+                let gather = unsafe { &mut *self.gather };
+                gather.buf[gather.len..gather.len + buf.len()].copy_from_slice(buf);
+                gather.len += buf.len();
+                return Ok(buf.len());
+            }
+        }
         // A stream over a caller's buffer (fmemopen) ends with the buffer.
         let room = self.memory_room(buf.len());
         if room < buf.len() {
@@ -319,6 +365,7 @@ impl Write for FILE {
         }
     }
     fn flush(&mut self) -> io::Result<()> {
+        self.flush_gather()?;
         match self.writer.flush() {
             Ok(()) => Ok(()),
             Err(err) => {
@@ -1624,35 +1671,24 @@ pub unsafe extern "C" fn vfprintf(file: *mut FILE, format: *const c_char, ap: va
     }
 
     // stafeto: a stream with no buffer (stderr) holds the text of one call
-    // in a buffer of GATHER bytes while it is formatted, and writes it with
-    // as few writes as it fills, so that the line of a message does not come
-    // apart among the lines of other programs.
-    if matches!(file.writer, FileInnerWriter::Unbuffered(_)) {
-        // SAFETY: the writer is taken out and put back at once; the zeroed
-        // stand-in is never used nor dropped.
-        let FileInnerWriter::Unbuffered(inner) =
-            core::mem::replace(&mut file.writer, unsafe { core::mem::zeroed() })
-        else {
-            unreachable!()
+    // in a buffer of GATHER bytes on this stack while it is formatted, and
+    // writes it with as few writes as it fills, so that the line of a
+    // message does not come apart among the lines of other programs.
+    if matches!(file.writer, FileInnerWriter::Unbuffered(_)) && file.mem.is_none() {
+        let mut gather = Gather {
+            buf: [0; GATHER],
+            len: 0,
         };
-        core::mem::forget(core::mem::replace(
-            &mut file.writer,
-            FileInnerWriter::Buf(BufWriter::with_capacity(GATHER, inner)),
-        ));
+        file.gather = &mut gather;
         let mut n = unsafe { printf::printf(&mut *file, CStr::from_ptr(format), ap) };
-        if file.flush().is_err() {
+        if file.flush_gather().is_err() {
             n = -1;
         }
-        // SAFETY: as above.
-        let writer = core::mem::replace(&mut file.writer, unsafe { core::mem::zeroed() });
-        core::mem::forget(core::mem::replace(&mut file.writer, writer.to_unbuffered()));
+        file.gather = ptr::null_mut();
         return n;
     }
     unsafe { printf::printf(&mut *file, CStr::from_ptr(format), ap) }
 }
-
-/// The bytes a stream with no buffer holds for one call of vfprintf.
-const GATHER: usize = 512;
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fprintf.html>.
 #[unsafe(no_mangle)]
