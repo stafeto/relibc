@@ -56,6 +56,10 @@ unsafe extern "C" {
         value: u64,
         out: *mut usize,
     ) -> c_int;
+    /// A timer on processor time (made with bit 9 of the notification type)
+    /// expired `count` times since the last word: the process service sends
+    /// its signal. 0 or a negated errno.
+    fn stafeto_timer_fire(timer: usize, count: u64) -> c_int;
     fn stafeto_timer_delete(timer: usize) -> c_int;
     fn stafeto_timer_getoverrun(timer: usize) -> c_int;
     fn stafeto_timer_gettime(timer: usize, out: *mut itimerspec) -> c_int;
@@ -391,11 +395,17 @@ fn valid_parts(parts: &[iovec]) -> Result<&[iovec]> {
     }
 }
 
+/// The timer on processor time `timer` (made by `timer_create` with bit 9 of
+/// the notification type) expired `count` times since the last word.
+pub(crate) fn timer_fire(timer: usize, count: u64) {
+    unsafe { stafeto_timer_fire(timer, count) };
+}
+
 /// The most bytes one read of the layer gives (proto_fs::MAX_READ).
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 21;
+const PLATFORM_INTERFACE: u64 = 22;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,

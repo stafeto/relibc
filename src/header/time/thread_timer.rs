@@ -15,12 +15,21 @@
 //! (at least a millisecond), since the time of a clock cannot pass faster
 //! than that. `setitimer` on ITIMER_VIRTUAL and ITIMER_PROF is such a
 //! timer on the clock of the process, which sends SIGVTALRM or SIGPROF.
+//!
+//! A timer on a CPU-time clock whose notice is a signal has a place in the
+//! timer table of the process service as well (`remote`), with no deadline
+//! there: at each expiry the helper tells the service how many expiries it
+//! counted since its last word (the ones it missed plus one), and the service
+//! sends the signal as for its own timers: code SI_TIMER, merged with a
+//! signal that waits, the overrun count in `timer_getoverrun`. The place
+//! counts in the timers of the process.
 
+use crate::platform::sys::timer_fire;
 use alloc::boxed::Box;
 use core::{
     mem::MaybeUninit,
     ptr,
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
 };
 
 use crate::{
@@ -69,6 +78,8 @@ struct Timer {
     cpu: bool,
     event: sigevent,
     inner: Mutex<Inner>,
+    /// The `timer_t` of the place in the service, 0 when the timer has none.
+    remote: AtomicUsize,
     /// Counts the changes the helper must look at.
     epoch: AtomicU32,
     gone: AtomicBool,
@@ -150,16 +161,23 @@ extern "C" fn helper(arg: *mut c_void) -> *mut c_void {
             } else {
                 let at = now(if timer.cpu { timer.clock } else { CLOCK_MONOTONIC });
                 if at >= inner.next {
-                    if inner.interval > 0 {
+                    let count = if inner.interval > 0 {
                         let missed = (at - inner.next) / inner.interval;
                         inner.next += (missed + 1) * inner.interval;
                         inner.overrun = missed.min(i32::MAX as u64) as c_int;
+                        missed.saturating_add(1)
                     } else {
                         inner.armed = false;
                         inner.overrun = 0;
-                    }
+                        1
+                    };
                     drop(inner);
-                    unsafe { aio::notify_event(&timer.event) };
+                    let remote = timer.remote.load(Ordering::Acquire);
+                    if remote != 0 {
+                        timer_fire(remote, count);
+                    } else {
+                        unsafe { aio::notify_event(&timer.event) };
+                    }
                     continue;
                 }
                 if timer.cpu {
@@ -211,6 +229,7 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
             interval: 0,
             overrun: 0,
         }),
+        remote: AtomicUsize::new(0),
         epoch: AtomicU32::new(0),
         gone: AtomicBool::new(false),
     }));
@@ -223,6 +242,21 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
                 (*timer).event.sigev_value.sival_ptr = id.cast();
             }
             (*timer).event.sigev_notify = SIGEV_SIGNAL;
+        }
+    }
+    // A signal on a CPU-time clock gets its place in the service (bit 9 of
+    // the type: the library keeps the deadline); EAGAIN there is the share of
+    // timers of the process.
+    let (notify, signal) = unsafe { ((*timer).event.sigev_notify, (*timer).event.sigev_signo) };
+    if cpu && notify == SIGEV_SIGNAL && signal != 0 {
+        let mut remote_event = unsafe { (*timer).event.clone() };
+        remote_event.sigev_notify = SIGEV_SIGNAL | 0x200;
+        match Sys::timer_create(CLOCK_MONOTONIC, &remote_event) {
+            Ok(remote) => unsafe { (*timer).remote.store(remote as usize, Ordering::Release) },
+            Err(error) => {
+                drop(unsafe { Box::from_raw(timer) });
+                return Err(error);
+            }
         }
     }
     let mut thread = MaybeUninit::<pthread_t>::uninit();
@@ -249,6 +283,10 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
         made = unsafe { pthread_create(thread.as_mut_ptr(), ptr::null(), helper, timer.cast()) };
     }
     if made != 0 {
+        let remote = unsafe { (*timer).remote.load(Ordering::Acquire) };
+        if remote != 0 {
+            let _ = Sys::timer_delete(remote as timer_t);
+        }
         drop(unsafe { Box::from_raw(timer) });
         return Err(Errno(crate::header::errno::EAGAIN));
     }
@@ -278,6 +316,11 @@ pub fn gettime(id: timer_t) -> Option<itimerspec> {
 
 pub fn getoverrun(id: timer_t) -> Option<c_int> {
     let timer = timer_of(id)?;
+    let remote = timer.remote.load(Ordering::Acquire);
+    if remote != 0 {
+        // The service counts the overrun of the signal it sends.
+        return Some(Sys::timer_getoverrun(remote as timer_t).unwrap_or(0));
+    }
     let overrun = timer.inner.lock().overrun;
     Some(overrun)
 }
@@ -288,9 +331,13 @@ pub fn delete(id: timer_t) -> Option<()> {
     // it, so the flag and the wake-up are made while the lock is held; the
     // timer is not touched after the lock is let go.
     let inner = timer.inner.lock();
+    let remote = timer.remote.load(Ordering::Acquire);
     timer.gone.store(true, Ordering::Release);
     changed(timer);
     drop(inner);
+    if remote != 0 {
+        let _ = Sys::timer_delete(remote as timer_t);
+    }
     Some(())
 }
 
@@ -320,8 +367,14 @@ pub fn settime(id: timer_t, flags: c_int, value: &itimerspec) -> Option<Result<i
         inner.overrun = 0;
         inner.armed = true;
     }
+    let remote = timer.remote.load(Ordering::Acquire);
     drop(inner);
     changed(timer);
+    if remote != 0 {
+        // A new setting starts a new signal: the service forgets the overrun
+        // of the last (a disarming of its place, which never arms).
+        let _ = Sys::timer_settime(remote as timer_t, 0, &itimerspec::default(), None);
+    }
     Some(Ok(old))
 }
 
