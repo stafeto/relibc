@@ -52,6 +52,7 @@ mod getdelim;
 
 mod ext;
 mod helpers;
+pub(crate) mod memfile;
 pub mod memstream;
 pub mod printf;
 pub mod reader;
@@ -365,6 +366,9 @@ impl Write for FILE {
         }
     }
     fn flush(&mut self) -> io::Result<()> {
+        if self.flags & F_CLOSED != 0 {
+            return Ok(());
+        }
         self.flush_gather()?;
         match self.writer.flush() {
             Ok(()) => Ok(()),
@@ -569,8 +573,16 @@ pub unsafe extern "C" fn fclose(stream: *mut FILE) -> c_int {
     let mut r = stream.flush().is_err();
     r = r || !stream.sync_memory();
     // TODO: better error handling
-    let close = Sys::close(*stream.file).map(|()| 0).or_minus_one_errno() == -1;
+    let close = close_fd(*stream.file).map(|()| 0).or_minus_one_errno() == -1;
     r = r || close;
+    // The descriptor is gone and its number may be another file's at once:
+    // what the buffer still holds (a write that failed) is dropped and the
+    // stream is marked closed, so that a flush by another thread (fflush(NULL)
+    // between the unlock and the removal from the list) writes nothing.
+    stream.writer.purge();
+    stream.gather = ptr::null_mut();
+    stream.mem = None;
+    stream.flags |= constants::F_CLOSED;
 
     if stream.flags & constants::F_PERM == 0 {
         // Not one of stdin, stdout or stderr. The list is locked after the
@@ -753,6 +765,11 @@ pub unsafe extern "C" fn fgets(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fileno(stream: *mut FILE) -> c_int {
     let stream = unsafe { (*stream).lock() };
+    if memfile::is_memory(*stream.file) {
+        // A stream over memory has no file descriptor.
+        platform::ERRNO.set(errno::EBADF);
+        return -1;
+    }
     *stream.file
 }
 
@@ -960,6 +977,26 @@ pub unsafe extern "C" fn fseeko(stream: *mut FILE, off: off_t, whence: c_int) ->
     unsafe { fseek_locked(&mut stream, off, whence) }
 }
 
+/// `lseek` of the descriptor of a stream, which is the content of a stream
+/// over memory when the number is below -1.
+pub(crate) fn lseek(fd: c_int, off: off_t, whence: c_int) -> crate::error::Result<off_t> {
+    if memfile::is_memory(fd) {
+        memfile::seek(fd, off, whence)
+    } else {
+        Sys::lseek(fd, off, whence)
+    }
+}
+
+/// Closes the descriptor of a stream.
+fn close_fd(fd: c_int) -> crate::error::Result<()> {
+    if memfile::is_memory(fd) {
+        memfile::close(fd);
+        Ok(())
+    } else {
+        Sys::close(fd)
+    }
+}
+
 pub unsafe fn fseek_locked(stream: &mut FILE, mut off: off_t, whence: c_int) -> c_int {
     if whence == SEEK_CUR {
         // Since it's a buffered writer, our actual cursor isn't where the user
@@ -972,8 +1009,13 @@ pub unsafe fn fseek_locked(stream: &mut FILE, mut off: off_t, whence: c_int) -> 
         return -1;
     }
 
-    let from = Sys::lseek(*stream.file, 0, SEEK_CUR).unwrap_or(0);
-    if Sys::lseek(*stream.file, off, whence).or_minus_one_errno() < 0 {
+    // Only a stream over a fixed buffer needs the place it leaves.
+    let from = if matches!(stream.mem, Some(memstream::MemKind::Fixed { .. })) {
+        lseek(*stream.file, 0, SEEK_CUR).unwrap_or(0)
+    } else {
+        0
+    };
+    if lseek(*stream.file, off, whence).or_minus_one_errno() < 0 {
         return -1;
     }
     if !stream.memory_seek_ok(from) {
@@ -1013,7 +1055,7 @@ pub unsafe extern "C" fn ftello(stream: *mut FILE) -> off_t {
 }
 
 pub unsafe extern "C" fn ftell_locked(stream: &mut FILE) -> off_t {
-    let pos = Sys::lseek(*stream.file, 0, SEEK_CUR).or_minus_one_errno();
+    let pos = lseek(*stream.file, 0, SEEK_CUR).or_minus_one_errno();
     if pos < 0 {
         return -1;
     }
@@ -1871,16 +1913,16 @@ pub unsafe extern "C" fn sscanf(s: *const c_char, format: *const c_char, __valis
 }
 
 pub unsafe fn flush_io_streams() {
-    let flush = |stream: *mut FILE| {
-        let stream = unsafe { &mut *stream };
-        let _ = stream.flush();
-    };
-    flush(unsafe { stdout });
-    flush(unsafe { stderr });
-    // Exit flushes every open stream (XSH exit): the process has one thread
-    // left and nobody holds a lock. The streams that fopen and the others
-    // made put their flush here when the first of them was made, so that a
-    // program that opens none carries no code for them.
+    // Exit flushes every open stream (XSH exit) and keeps each stream that
+    // can hold output locked for good (as musl does), so that a thread that
+    // still writes cannot tear a line while its buffer goes out and cannot
+    // add to the buffer after it went out. A stream that is read only, or has
+    // no buffer, is not locked: a thread that waits in a read under its lock
+    // does not hold the exit. The streams that fopen and the others made put
+    // their flush here when the first of them was made, so that a program
+    // that opens none carries no code for them.
+    flush_final(unsafe { stdout });
+    flush_final(unsafe { stderr });
     let hook = FLUSH_OPEN.load(Ordering::Acquire);
     if !hook.is_null() {
         let hook: fn() = unsafe { mem::transmute(hook) };
@@ -1888,19 +1930,34 @@ pub unsafe fn flush_io_streams() {
     }
 }
 
+/// Flushes a stream for the last time and keeps its lock.
+fn flush_final(stream: *mut FILE) {
+    let stream = unsafe { &mut *stream };
+    if stream.flags & constants::F_NOWR != 0
+        || matches!(stream.writer, FileInnerWriter::Unbuffered(_))
+    {
+        let _ = stream.flush();
+        return;
+    }
+    // The lock stays: nothing writes to the stream after this.
+    unsafe { flockfile(stream) };
+    let _ = stream.flush();
+    let _ = stream.sync_memory();
+}
+
 /// The function that flushes the streams of `OPEN_STREAMS`, set by `track`.
 static FLUSH_OPEN: core::sync::atomic::AtomicPtr<()> =
     core::sync::atomic::AtomicPtr::new(ptr::null_mut());
 
-/// Flushes the streams of the list.
+/// Flushes the streams of the list for the last time. The list stays locked
+/// (as `fflush(NULL)` takes it before a stream, `fclose` takes it after its
+/// stream is let go), so that no stream is freed or added meanwhile.
 fn flush_open_streams() {
-    let mut at = 0;
-    while let Some(open) = open_stream(at) {
-        let stream = unsafe { &mut *open };
-        let _ = stream.flush();
-        let _ = stream.sync_memory();
-        at += 1;
+    let open = OPEN_STREAMS.lock();
+    for &stream in open.iter() {
+        flush_final(stream as *mut FILE);
     }
+    mem::forget(open);
 }
 
 /// The streams `fopen`, `fdopen`, `popen` and the memory streams made and
@@ -1922,8 +1979,3 @@ fn untrack(stream: *mut FILE) {
     }
 }
 
-/// The open stream at `at` of the list, if there is one (exit, which runs
-/// with one thread and no lock held).
-fn open_stream(at: usize) -> Option<*mut FILE> {
-    OPEN_STREAMS.lock().get(at).map(|&s| s as *mut FILE)
-}

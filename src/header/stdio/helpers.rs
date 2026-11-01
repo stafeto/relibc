@@ -59,14 +59,16 @@ pub fn _fdopen(fd: c_int, mode: CStr) -> Result<Box<FILE>, Errno> {
         flags |= if mode.first() == b'r' { F_NOWR } else { F_NORD };
     }
 
-    if mode.contains(b'e') {
+    // The content of a stream over memory has no flags of a descriptor.
+    let memory = super::memfile::is_memory(fd);
+    if mode.contains(b'e') && !memory {
         unsafe {
             fcntl(fd, F_SETFD, FD_CLOEXEC as c_ulonglong);
         }
     }
 
     if mode.first() == b'a' {
-        let f = unsafe { fcntl(fd, F_GETFL, 0) };
+        let f = if memory { O_APPEND } else { unsafe { fcntl(fd, F_GETFL, 0) } };
         if (f & O_APPEND) == 0 {
             unsafe {
                 fcntl(

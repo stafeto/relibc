@@ -384,9 +384,12 @@ pub unsafe extern "C" fn exit(status: c_int) -> ! {
 
     unsafe { ld_so::fini() };
 
-    unsafe { crate::pthread::terminate_from_main_thread() };
-
+    // The streams are flushed and locked first: a thread that a request of
+    // cancellation reaches inside a write would die with the lock of its
+    // stream, and the flush would wait for it for good.
     unsafe { flush_io_streams() };
+
+    unsafe { crate::pthread::terminate_from_main_thread() };
 
     Sys::exit(status);
 }

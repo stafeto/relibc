@@ -3,6 +3,7 @@ use crate::{
     error::{Errno, ResultExt},
     header::{
         fcntl::O_CREAT,
+        stdio::memfile,
         sys_stat::stat,
         unistd::{SEEK_CUR, SEEK_END, SEEK_SET},
     },
@@ -14,6 +15,12 @@ use crate::{
     },
 };
 use core::ops::Deref;
+
+/// The error of the content of a stream over memory, errno set as a call
+/// of the system would.
+fn memory_error(error: Errno) -> io::Error {
+    io::Error::from_raw_os_error(error.sync().0)
+}
 
 pub struct File {
     pub fd: c_int,
@@ -85,6 +92,9 @@ impl File {
 
 impl io::Read for &File {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if memfile::is_memory(self.fd) {
+            return memfile::read(self.fd, buf).map_err(memory_error);
+        }
         match Sys::read(self.fd, buf).map(|read| read as ssize_t).or_minus_one_errno() /* TODO */ {
             -1 => Err(io::last_os_error()),
             ok => Ok(ok.cast_unsigned()),
@@ -94,6 +104,9 @@ impl io::Read for &File {
 
 impl io::Write for &File {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if memfile::is_memory(self.fd) {
+            return memfile::write(self.fd, buf).map_err(memory_error);
+        }
         match Sys::write(self.fd, buf)
             .map(|read| read as ssize_t)
             .or_minus_one_errno()
@@ -116,6 +129,11 @@ impl io::Seek for &File {
             io::SeekFrom::End(end) => (end as off_t, SEEK_END),
         };
 
+        if memfile::is_memory(self.fd) {
+            return memfile::seek(self.fd, offset, whence)
+                .map(|at| at.cast_unsigned())
+                .map_err(memory_error);
+        }
         Ok(Sys::lseek(self.fd, offset, whence)?.cast_unsigned())
     }
 }
@@ -152,9 +170,12 @@ impl Deref for File {
 
 impl Drop for File {
     fn drop(&mut self) {
-        if !self.reference
-            && let Err(e) = Sys::close(self.fd)
-        {
+        if self.reference {
+            return;
+        }
+        if memfile::is_memory(self.fd) {
+            memfile::close(self.fd);
+        } else if let Err(e) = Sys::close(self.fd) {
             log::warn!("Close did not succeed: {e:?}");
         }
     }

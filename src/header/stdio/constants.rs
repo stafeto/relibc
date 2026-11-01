@@ -15,6 +15,8 @@ pub const F_ERR: c_int = 32;
 pub const F_SVB: c_int = 64;
 pub const F_APP: c_int = 128;
 pub const F_BADJ: c_int = 256;
+/// fclose has closed the stream: its buffer is gone and it writes nothing.
+pub(crate) const F_CLOSED: c_int = 1 << 12;
 
 // SEEK_SET, SEEK_CUR and SEEK_END defined in fcntl bits header
 

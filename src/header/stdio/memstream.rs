@@ -1,28 +1,29 @@
 //! Streams over memory: `fmemopen`, `open_memstream` and `open_wmemstream`.
 //!
-//! The content of such a stream lives in an unlinked temporary file, so the
-//! stream is an ordinary one. The caller's buffer follows the file at each
-//! `fflush`, `fseek` and `fclose`, which are the points where the specification
-//! requires it to be current.
+//! The content of such a stream is a buffer of the process behind a descriptor
+//! number that no file has (`memfile`): the stream is an ordinary one over it,
+//! with no file, no file service and no space of a file system. `fileno` of it
+//! is -1 and EBADF. The caller's buffer follows the content at each `fflush`,
+//! `fseek` and `fclose`, which are the points where the specification requires
+//! it to be current.
 
 use alloc::{boxed::Box, vec::Vec};
 
 use super::{
     FILE, Pending, SEEK_CUR, SEEK_END, SEEK_SET,
     constants::{F_APP, F_NOWR},
-    helpers,
+    helpers, lseek, memfile,
 };
 use crate::{
     c_str::CStr,
     error::{Errno, ResultExtPtrMut},
     header::{
         errno::{EINVAL, ENOMEM},
-        fcntl::O_CLOEXEC,
         stdlib,
     },
     platform::{
-        self, Pal, Sys,
-        types::{c_char, c_int, c_void, size_t, wchar_t},
+        self,
+        types::{c_char, c_void, size_t, wchar_t},
     },
 };
 
@@ -45,46 +46,6 @@ pub(crate) enum MemKind {
         bufp: *mut *mut wchar_t,
         sizep: *mut size_t,
     },
-}
-
-/// An unlinked file in `/tmp`, open for reading and writing.
-fn anonymous_file() -> Result<c_int, Errno> {
-    let mut name = *b"/tmp/memstrXXXXXX\0";
-    let name = name.as_mut_ptr().cast::<c_char>();
-    let fd = unsafe { stdlib::mkostemp(name, O_CLOEXEC) };
-    if fd < 0 {
-        return Err(Errno(platform::ERRNO.get()));
-    }
-    let path = unsafe { CStr::from_ptr(name) };
-    let _ = Sys::unlink(path);
-    Ok(fd)
-}
-
-fn read_all(fd: c_int, len: usize) -> Option<Vec<u8>> {
-    let mut content = Vec::new();
-    content.try_reserve_exact(len).ok()?;
-    content.resize(len, 0);
-    let mut done = 0;
-    while done < len {
-        match Sys::pread(fd, &mut content[done..], done as _) {
-            Ok(0) => break,
-            Ok(n) => done += n,
-            Err(_) => return None,
-        }
-    }
-    content.truncate(done);
-    Some(content)
-}
-
-fn write_all(fd: c_int, content: &[u8]) -> bool {
-    let mut done = 0;
-    while done < content.len() {
-        match Sys::pwrite(fd, &content[done..], done as _) {
-            Ok(0) | Err(_) => return false,
-            Ok(n) => done += n,
-        }
-    }
-    true
 }
 
 /// The characters of UTF-8 text; a cut-off sequence at the end is left out.
@@ -125,15 +86,16 @@ impl FILE {
             return want;
         };
         let fd = *self.file;
-        let Ok(cur) = Sys::lseek(fd, 0, SEEK_CUR) else {
-            return want;
-        };
         let at = if self.flags & F_APP != 0 {
-            let end = Sys::lseek(fd, 0, SEEK_END);
-            let _ = Sys::lseek(fd, cur, SEEK_SET);
-            end.unwrap_or(cur) as usize
+            match lseek(fd, 0, SEEK_END) {
+                Ok(end) => end as usize,
+                Err(_) => return want,
+            }
         } else {
-            cur as usize
+            match lseek(fd, 0, SEEK_CUR) {
+                Ok(cur) => cur as usize,
+                Err(_) => return want,
+            }
         } + self.writer.pending() as usize;
         want.min(size.saturating_sub(at))
     }
@@ -145,10 +107,10 @@ impl FILE {
             return true;
         };
         let fd = *self.file;
-        match Sys::lseek(fd, 0, SEEK_CUR) {
+        match lseek(fd, 0, SEEK_CUR) {
             Ok(to) if to as usize <= size => true,
             Ok(_) => {
-                let _ = Sys::lseek(fd, from, SEEK_SET);
+                let _ = lseek(fd, from, SEEK_SET);
                 platform::ERRNO.set(EINVAL);
                 false
             }
@@ -156,60 +118,43 @@ impl FILE {
         }
     }
 
-    /// Brings the buffer of a memory stream up to the content of its file.
-    /// The stream is locked and flushed. False when the buffer could not be
-    /// made.
+    /// Brings the buffer of a memory stream up to its content. The stream is
+    /// locked and flushed. False when the buffer could not be made.
     pub(crate) fn sync_memory(&mut self) -> bool {
         let Some(kind) = self.mem else {
             return true;
         };
         let fd = *self.file;
-        let Ok(pos) = Sys::lseek(fd, 0, SEEK_CUR) else {
-            return false;
-        };
-        let Ok(end) = Sys::lseek(fd, 0, SEEK_END) else {
-            return false;
-        };
-        let _ = Sys::lseek(fd, pos, SEEK_SET);
-        let (pos, end) = (pos as usize, end as usize);
-        match kind {
+        let Ok(synced) = memfile::with(fd, |data, pos| match kind {
             MemKind::Fixed { buf, size, binary } => {
                 if buf.is_null() || self.flags & F_NOWR != 0 {
                     return true;
                 }
-                let Some(content) = read_all(fd, end.min(size)) else {
-                    return false;
-                };
-                unsafe { buf.copy_from_nonoverlapping(content.as_ptr(), content.len()) };
-                if !binary && content.len() < size {
-                    unsafe { *buf.add(content.len()) = 0 };
+                let len = data.len().min(size);
+                unsafe { buf.copy_from_nonoverlapping(data.as_ptr(), len) };
+                if !binary && len < size {
+                    unsafe { *buf.add(len) = 0 };
                 }
                 true
             }
             MemKind::Dynamic { bufp, sizep } => {
-                let len = pos.min(end);
-                let Some(content) = read_all(fd, len) else {
-                    return false;
-                };
-                let new = unsafe { stdlib::realloc((*bufp).cast(), content.len() + 1) };
+                let len = (*pos).min(data.len());
+                let new = unsafe { stdlib::realloc((*bufp).cast(), len + 1) };
                 if new.is_null() {
                     return false;
                 }
                 let new = new.cast::<u8>();
                 unsafe {
-                    new.copy_from_nonoverlapping(content.as_ptr(), content.len());
-                    *new.add(content.len()) = 0;
+                    new.copy_from_nonoverlapping(data.as_ptr(), len);
+                    *new.add(len) = 0;
                     *bufp = new.cast();
-                    *sizep = content.len();
+                    *sizep = len;
                 }
                 true
             }
             MemKind::Wide { bufp, sizep } => {
-                let len = pos.min(end);
-                let Some(content) = read_all(fd, len) else {
-                    return false;
-                };
-                let chars = wide_chars(&content);
+                let len = (*pos).min(data.len());
+                let chars = wide_chars(&data[..len]);
                 let bytes = (chars.len() + 1) * core::mem::size_of::<wchar_t>();
                 let new = unsafe { stdlib::realloc((*bufp).cast(), bytes) };
                 if new.is_null() {
@@ -224,17 +169,20 @@ impl FILE {
                 }
                 true
             }
-        }
+        }) else {
+            return false;
+        };
+        synced
     }
 }
 
 fn open_dynamic(kind: MemKind, wide: bool) -> *mut FILE {
     let result = (|| {
-        let fd = anonymous_file()?;
+        let fd = memfile::create(Vec::new(), 0, false)?;
         let mut stream = match helpers::_fdopen(fd, CStr::from_bytes_with_nul(b"w+\0").unwrap()) {
             Ok(stream) => stream,
             Err(e) => {
-                let _ = Sys::close(fd);
+                memfile::close(fd);
                 return Err(e);
             }
         };
@@ -243,8 +191,7 @@ fn open_dynamic(kind: MemKind, wide: bool) -> *mut FILE {
             stream.orientation = 1;
         }
         if !stream.sync_memory() {
-            let _ = Sys::close(fd);
-            stream.file.reference = true;
+            // The stream drops with its content.
             return Err(Errno(ENOMEM));
         }
         Ok(stream)
@@ -305,7 +252,6 @@ pub unsafe extern "C" fn fmemopen(
     }
     let buf = buf.cast::<u8>();
     let result = (|| {
-        let fd = anonymous_file()?;
         // What the stream holds when it is opened.
         let content: &[u8] = if buf.is_null() || first == b'w' {
             &[]
@@ -318,26 +264,21 @@ pub unsafe extern "C" fn fmemopen(
                 all
             }
         };
-        if !write_all(fd, content) {
-            let errno = Errno(platform::ERRNO.get());
-            let _ = Sys::close(fd);
-            return Err(errno);
-        }
+        let mut data = Vec::new();
+        data.try_reserve_exact(content.len()).map_err(|_| Errno(ENOMEM))?;
+        data.extend_from_slice(content);
         if first == b'w' && !buf.is_null() && !mode.contains(b'b') {
             unsafe { *buf = 0 };
         }
+        let start = if first == b'a' { content.len() } else { 0 };
+        let fd = memfile::create(data, start, first == b'a')?;
         let mut stream = match helpers::_fdopen(fd, mode) {
             Ok(stream) => stream,
             Err(e) => {
-                let _ = Sys::close(fd);
+                memfile::close(fd);
                 return Err(e);
             }
         };
-        let _ = Sys::lseek(
-            fd,
-            if first == b'a' { content.len() as _ } else { 0 },
-            SEEK_SET,
-        );
         stream.mem = Some(MemKind::Fixed {
             buf,
             size,
