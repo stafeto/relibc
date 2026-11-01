@@ -745,6 +745,131 @@ pub unsafe extern "C" fn getprotoent() -> *mut protoent {
     (&raw mut PROTO_ENTRY).cast::<protoent>()
 }
 
+/// One service of /etc/services as `getservbyname_r` finds it.
+struct ServiceLine {
+    name: [u8; 64],
+    name_len: usize,
+    proto: [u8; 16],
+    proto_len: usize,
+    port: u16,
+}
+
+/// Looks `name` up in /etc/services (by its official name or an alias, of
+/// the protocol `proto` when there is one), reading the file through a
+/// descriptor of this call and a buffer on the stack: no static state, no
+/// shared position.
+fn find_service(name: &[u8], proto: Option<&[u8]>) -> Option<ServiceLine> {
+    use crate::io::Read;
+    let mut file = crate::fs::File::open(c"/etc/services".into(), O_RDONLY | crate::header::fcntl::O_CLOEXEC).ok()?;
+    let mut chunk = [0u8; 256];
+    let mut line = [0u8; 256];
+    let mut len = 0usize;
+    let mut skipping = false;
+    loop {
+        let got = match file.read(&mut chunk) {
+            Ok(0) | Err(_) => 0,
+            Ok(n) => n,
+        };
+        // At the end of the file the last line has no newline: feed one.
+        let end = got == 0;
+        let bytes: &[u8] = if end { b"\n" } else { &chunk[..got] };
+        for &byte in bytes {
+            if byte != b'\n' {
+                if len < line.len() {
+                    line[len] = byte;
+                    len += 1;
+                } else {
+                    skipping = true;
+                }
+                continue;
+            }
+            let text = &line[..len];
+            let text = if skipping { &text[..0] } else { text };
+            len = 0;
+            skipping = false;
+            let text = text.split(|&b| b == b'#').next().unwrap_or(&[]);
+            let mut words = text
+                .split(|b| b.is_ascii_whitespace())
+                .filter(|w| !w.is_empty());
+            let (Some(official), Some(port_proto)) = (words.next(), words.next()) else {
+                continue;
+            };
+            let mut parts = port_proto.split(|&b| b == b'/');
+            let (Some(port), Some(line_proto)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            if proto.is_some_and(|wanted| !wanted.eq_ignore_ascii_case(line_proto)) {
+                continue;
+            }
+            if !official.eq_ignore_ascii_case(name) && !words.any(|a| a.eq_ignore_ascii_case(name)) {
+                continue;
+            }
+            let port = core::str::from_utf8(port).ok()?.parse::<u16>().ok()?;
+            if official.len() >= 64 || line_proto.len() >= 16 {
+                continue;
+            }
+            let mut found = ServiceLine {
+                name: [0; 64],
+                name_len: official.len(),
+                proto: [0; 16],
+                proto_len: line_proto.len(),
+                port,
+            };
+            found.name[..official.len()].copy_from_slice(official);
+            found.proto[..line_proto.len()].copy_from_slice(line_proto);
+            return Some(found);
+        }
+        if end {
+            return None;
+        }
+    }
+}
+
+/// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/endservent.html>.
+///
+/// The reentrant form of `getservbyname` (glibc's): the entry is built in
+/// `buf`, and nothing is kept between calls. ERANGE when `buf` is too small.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getservbyname_r(
+    name: *const c_char,
+    proto: *const c_char,
+    result_buf: *mut servent,
+    buf: *mut c_char,
+    buflen: crate::platform::types::size_t,
+    result: *mut *mut servent,
+) -> c_int {
+    unsafe { *result = ptr::null_mut() };
+    let wanted = unsafe { core::ffi::CStr::from_ptr(name) }.to_bytes();
+    let proto = (!proto.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(proto) }.to_bytes());
+    let Some(found) = find_service(wanted, proto) else {
+        return ENOENT;
+    };
+    // The room: an empty alias list (one pointer, aligned), the two names.
+    let align = (buf as usize).wrapping_neg() % mem::align_of::<*mut c_char>();
+    let need = align + mem::size_of::<*mut c_char>() + found.name_len + 1 + found.proto_len + 1;
+    if buflen < need {
+        return crate::header::errno::ERANGE;
+    }
+    unsafe {
+        let aliases = buf.add(align).cast::<*mut c_char>();
+        *aliases = ptr::null_mut();
+        let name_at = buf.add(align + mem::size_of::<*mut c_char>());
+        ptr::copy_nonoverlapping(found.name.as_ptr().cast::<c_char>(), name_at, found.name_len);
+        *name_at.add(found.name_len) = 0;
+        let proto_at = name_at.add(found.name_len + 1);
+        ptr::copy_nonoverlapping(found.proto.as_ptr().cast::<c_char>(), proto_at, found.proto_len);
+        *proto_at.add(found.proto_len) = 0;
+        *result_buf = servent {
+            s_name: name_at,
+            s_aliases: aliases,
+            s_port: c_int::from(htons(found.port)),
+            s_proto: proto_at,
+        };
+        *result = result_buf;
+    }
+    0
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/endservent.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getservbyname(name: *const c_char, proto: *const c_char) -> *mut servent {
@@ -977,8 +1102,20 @@ fn getaddrinfo_inner(
                 SOCK_DGRAM => c"udp".as_ptr(),
                 _ => ptr::null(),
             };
-            let entry = unsafe { getservbyname(service.to_bytes_with_nul().as_ptr().cast(), proto) };
-            if entry.is_null() {
+            let mut record = mem::MaybeUninit::<servent>::uninit();
+            let mut buffer = [0 as c_char; 256];
+            let mut entry: *mut servent = ptr::null_mut();
+            let status = unsafe {
+                getservbyname_r(
+                    service.to_bytes_with_nul().as_ptr().cast(),
+                    proto,
+                    record.as_mut_ptr(),
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &raw mut entry,
+                )
+            };
+            if status != 0 || entry.is_null() {
                 return Err(AddrInfoErr::EAI_SERVICE);
             }
             port = u16::from_be(unsafe { (*entry).s_port } as u16);
@@ -1114,7 +1251,7 @@ pub unsafe extern "C" fn getnameinfo(
             let port_str = sa.sin_port.to_be().to_string();
             let port_bytes = port_str.as_bytes();
             if (servlen as usize) <= port_bytes.len() {
-                return EAI_MEMORY; // Buffer too small
+                return EAI_OVERFLOW; // Buffer too small
             }
             unsafe {
                 ptr::copy_nonoverlapping(
@@ -1138,7 +1275,7 @@ pub unsafe extern "C" fn getnameinfo(
             };
             let bytes = text.as_bytes();
             if (servlen as usize) <= bytes.len() {
-                return EAI_MEMORY;
+                return EAI_OVERFLOW;
             }
             unsafe {
                 ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), serv, bytes.len());
@@ -1153,7 +1290,7 @@ pub unsafe extern "C" fn getnameinfo(
             let ip_str = ip_addr.to_string();
             let ip_bytes = ip_str.as_bytes();
             if (hostlen as usize) <= ip_bytes.len() {
-                return EAI_MEMORY; // Buffer too small
+                return EAI_OVERFLOW; // Buffer too small
             }
             unsafe {
                 ptr::copy_nonoverlapping(ip_bytes.as_ptr().cast::<c_char>(), host, ip_bytes.len())
@@ -1163,7 +1300,7 @@ pub unsafe extern "C" fn getnameinfo(
             match lookup_addr(&sa.sin_addr).map(|host_names| host_names.into_iter().next()) {
                 Ok(Some(hostname)) => {
                     if (hostlen as usize) <= hostname.len() {
-                        return EAI_MEMORY; // Buffer too small
+                        return EAI_OVERFLOW; // Buffer too small
                     }
                     unsafe {
                         ptr::copy_nonoverlapping(
@@ -1187,7 +1324,7 @@ pub unsafe extern "C" fn getnameinfo(
                     let ip_str = ip_addr.to_string();
                     let ip_bytes = ip_str.as_bytes();
                     if (hostlen as usize) <= ip_bytes.len() {
-                        return EAI_MEMORY;
+                        return EAI_OVERFLOW;
                     }
                     unsafe {
                         ptr::copy_nonoverlapping(
