@@ -390,6 +390,17 @@ pub unsafe extern "C" fn fexecve(
         .or_minus_one_errno()
 }
 
+/// Runs `/bin/sh` on `script` with the arguments of `argv` after the first.
+/// Returns, with errno, only when the shell cannot run.
+unsafe fn exec_as_script(script: *const c_char, argv: *const *mut c_char) {
+    let list = unsafe { path::shell_argv(script, argv) };
+    unsafe { execv(path::SHELL.as_ptr(), list.as_ptr()) };
+    // No shell in the image: the answer stays ENOEXEC.
+    if platform::ERRNO.get() == errno::ENOENT {
+        platform::ERRNO.set(errno::ENOEXEC);
+    }
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/exec.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *mut c_char) -> c_int {
@@ -397,7 +408,11 @@ pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *mut c_char) -
     let file_bytes = file.to_bytes();
 
     if file_bytes.contains(&b'/') || (cfg!(target_os = "redox") && file_bytes.contains(&b':')) {
-        unsafe { execv(file.as_ptr(), argv) }
+        let status = unsafe { execv(file.as_ptr(), argv) };
+        if cfg!(stafeto) && platform::ERRNO.get() == errno::ENOEXEC {
+            unsafe { exec_as_script(file.as_ptr(), argv) };
+        }
+        status
     } else {
         let mut error = errno::ENOENT;
 
@@ -416,6 +431,11 @@ pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *mut c_char) -
                 let program_c =
                     unsafe { CStr::from_bytes_with_nul_unchecked(program_buf.as_slice()) };
                 unsafe { execv(program_c.as_ptr(), argv) };
+                if cfg!(stafeto) && platform::ERRNO.get() == errno::ENOEXEC {
+                    // A file that is no program runs as input of the shell
+                    // (XSH exec): `sh file args`.
+                    unsafe { exec_as_script(program_c.as_ptr(), argv) };
+                }
 
                 match platform::ERRNO.get() {
                     errno::ENOENT => (),
@@ -708,11 +728,7 @@ pub extern "C" fn getlogin_r(name: *mut c_char, namesize: size_t) -> c_int {
         time: [i64; 2],
     }
     const USER_PROCESS: c_short = 7;
-    unsafe extern "C" {
-        fn setutxent();
-        fn endutxent();
-        fn getutxline(line: *const Utmpx) -> *mut Utmpx;
-    }
+    const LOGIN_PROCESS: c_short = 6;
 
     let mut tty = [0 as c_char; 64];
     if !(0..3).any(|fd| ttyname_r(fd, tty.as_mut_ptr(), tty.len()) == 0) {
@@ -721,35 +737,66 @@ pub extern "C" fn getlogin_r(name: *mut c_char, namesize: size_t) -> c_int {
     // SAFETY: ttyname_r ended the name with a NUL.
     let path = unsafe { CStr::from_ptr(tty.as_ptr()) }.to_bytes();
     let line = path.strip_prefix(b"/dev/").unwrap_or(path);
-    let mut key: Utmpx = unsafe { mem::zeroed() };
-    key.kind = USER_PROCESS;
-    for (to, from) in key.line.iter_mut().zip(line) {
-        *to = *from as c_char;
-    }
     let mut found: Option<([c_char; 33], usize)> = None;
-    // SAFETY: the accounting functions are libc's own; the entry they return
-    // is read before the next call.
-    unsafe {
-        setutxent();
-        let entry = getutxline(&key);
-        if !entry.is_null() {
-            let user = &(*entry).user;
-            let len = user.iter().position(|c| *c == 0).unwrap_or(user.len());
-            let mut copy = [0 as c_char; 33];
-            copy[..len].copy_from_slice(&user[..len]);
-            found = Some((copy, len));
+    // The records are read from a descriptor of this call, in a buffer on the
+    // stack: the position of the caller's own walk with getutxent is not
+    // touched, and nothing is static.
+    if let Ok(mut file) = crate::fs::File::open(
+        c"/var/run/utmpx".into(),
+        fcntl::O_RDONLY | fcntl::O_CLOEXEC,
+    ) {
+        use crate::io::Read;
+        let mut record: Utmpx = unsafe { mem::zeroed() };
+        loop {
+            // SAFETY: Utmpx holds integers only, any bytes are a value.
+            let bytes = unsafe {
+                slice::from_raw_parts_mut(
+                    (&raw mut record).cast::<u8>(),
+                    mem::size_of::<Utmpx>(),
+                )
+            };
+            let mut have = 0;
+            while have < bytes.len() {
+                match file.read(&mut bytes[have..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => have += n,
+                }
+            }
+            if have < bytes.len() {
+                break;
+            }
+            // A record of getutxline: a login or user process on the line.
+            let same_line = record.line.iter().zip(line).all(|(a, b)| *a as u8 == *b)
+                && record.line.get(line.len()).is_none_or(|c| *c == 0);
+            if (record.kind == USER_PROCESS || record.kind == LOGIN_PROCESS) && same_line {
+                let len = record.user.iter().position(|c| *c == 0).unwrap_or(record.user.len());
+                let mut copy = [0 as c_char; 33];
+                copy[..len].copy_from_slice(&record.user[..len]);
+                found = Some((copy, len));
+                break;
+            }
         }
-        endutxent();
     }
     let (user, len) = match found {
         Some(found) => found,
         None => {
-            let pw = crate::header::pwd::getpwuid(getuid());
-            if pw.is_null() {
+            let mut record: crate::header::pwd::passwd = unsafe { mem::zeroed() };
+            let mut buffer = [0 as c_char; 512];
+            let mut result: *mut crate::header::pwd::passwd = ptr::null_mut();
+            let status = unsafe {
+                crate::header::pwd::getpwuid_r(
+                    getuid(),
+                    &raw mut record,
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                    &raw mut result,
+                )
+            };
+            if status != 0 || result.is_null() {
                 return errno::ENXIO;
             }
-            // SAFETY: getpwuid gives a record with a NUL-terminated name.
-            let bytes = unsafe { CStr::from_ptr((*pw).pw_name) }.to_bytes();
+            // SAFETY: getpwuid_r gives a record with a NUL-terminated name.
+            let bytes = unsafe { CStr::from_ptr(record.pw_name) }.to_bytes();
             if bytes.len() > 32 {
                 return errno::ERANGE;
             }

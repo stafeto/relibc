@@ -10,7 +10,11 @@ pub use spawn_attr::{Flags, posix_spawnattr_t};
 
 use crate::{
     c_str::CStr,
-    header::{errno, stdlib::getenv},
+    header::{
+        errno,
+        stdlib::getenv,
+        unistd::path::{PathSearchIter, SHELL, shell_argv},
+    },
     iter::NulTerminated,
     platform::{
         self, Pal,
@@ -109,6 +113,7 @@ pub unsafe extern "C" fn posix_spawnp(
     if program.contains(b'/') {
         return unsafe { posix_spawn(pid, file, file_actions, attrp, argv, envp) };
     }
+    let (argv_ptr, envp_ptr) = (argv, envp);
     let argv = {
         if argv.is_null() || unsafe { (*argv).is_null() } {
             return errno::EINVAL;
@@ -126,6 +131,7 @@ pub unsafe extern "C" fn posix_spawnp(
     };
     let path_env = (!path_env.is_null()).then(|| unsafe { CStr::from_ptr(path_env) });
 
+    let argv_list = argv_ptr;
     match unsafe {
         platform::Sys::spawnp(
             program,
@@ -141,6 +147,49 @@ pub unsafe extern "C" fn posix_spawnp(
                 *pid = v;
             }
             0
+        }
+        Err(e) if cfg!(stafeto) && e.0 == errno::ENOEXEC => {
+            // The file found on the path is no program: the shell runs it
+            // (XSH posix_spawnp, "as if" execvp).
+            let Some(path_env) = path_env else { return e.0 };
+            for candidate in PathSearchIter::new(program.to_bytes(), &path_env) {
+                // SAFETY: the iterator ended the buffer with a NUL.
+                let found = unsafe { CStr::from_bytes_with_nul_unchecked(candidate.as_slice()) };
+                // The first file of the path that exists as a regular file with an
+                // execute bit: the one the layer stopped at (it looks with the
+                // effective IDs, as `stat` does; `access` would use the real ones).
+                let mut info = crate::header::sys_stat::stat::default();
+                if platform::Sys::stat(found, crate::out::Out::from_mut(&mut info)).is_err()
+                    || info.st_mode & crate::header::sys_stat::S_IFMT
+                        != crate::header::sys_stat::S_IFREG
+                    || info.st_mode & 0o111 == 0
+                {
+                    continue;
+                }
+                let list = unsafe { shell_argv(found.as_ptr(), argv_list) };
+                let shell = unsafe { NulTerminated::new(list.as_ptr()).unwrap() };
+                let envp = unsafe { NulTerminated::new(envp_ptr) };
+                return match unsafe {
+                    platform::Sys::spawn(
+                        CStr::from_ptr(SHELL.as_ptr()),
+                        file_actions.as_ref(),
+                        attrp.as_ref(),
+                        shell,
+                        envp,
+                    )
+                } {
+                    Ok(v) => {
+                        if let Some(pid) = unsafe { pid.as_mut() } {
+                            *pid = v;
+                        }
+                        0
+                    }
+                    // No shell in the image: the answer stays ENOEXEC.
+                    Err(second) if second.0 == errno::ENOENT => e.0,
+                    Err(second) => second.0,
+                };
+            }
+            e.0
         }
         Err(e) => e.0,
     }

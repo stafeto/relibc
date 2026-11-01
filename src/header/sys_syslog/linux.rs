@@ -8,8 +8,10 @@ use crate::header::{
     sys_un::sockaddr_un,
     unistd::close,
 };
+#[cfg(not(stafeto))]
+use crate::error::Errno;
 use crate::{
-    error::{Errno, Result},
+    error::Result,
     fs::File,
     io::BufWriter,
     platform::ERRNO,
@@ -25,27 +27,19 @@ impl LogSink for LogFile {
 
     // No log daemon runs on stafeto: the journal is a file the messages are
     // appended to, /var/log/messages. Where the file cannot be opened the
-    // messages go to the standard error, as on a system whose log is the
-    // terminal.
+    // open fails: LOG_CONS then sends the message to the console, and without
+    // it the message is lost.
     #[cfg(stafeto)]
     fn open() -> Result<Self>
     where
         Self: Sized,
     {
         use crate::header::fcntl::{O_APPEND, O_CLOEXEC, O_WRONLY};
-        // The refusals on the way to the file that opens are no error.
+        // The refusal of the file is no error of the caller.
         let saved = ERRNO.get();
-        let file = File::create(c"/var/log/messages".into(), O_WRONLY | O_APPEND | O_CLOEXEC, 0o644)
-            .or_else(|_| {
-                let fd = crate::header::unistd::dup(2);
-                if fd < 0 {
-                    Err(Errno(ERRNO.get()))
-                } else {
-                    Ok(File::new(fd))
-                }
-            })?;
+        let file = File::create(c"/var/log/messages".into(), O_WRONLY | O_APPEND | O_CLOEXEC, 0o644);
         ERRNO.set(saved);
-        Ok(Self(BufWriter::new(file)))
+        Ok(Self(BufWriter::new(file?)))
     }
 
     #[cfg(not(stafeto))]

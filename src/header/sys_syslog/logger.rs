@@ -115,15 +115,23 @@ impl<L: LogSink> LogParams<L> {
             let sink = w.writer();
             sink.write_all(wire).and_then(|()| sink.flush())
         };
-        if self.maybe_open_logger().is_ok()
-            && self.writer.as_mut().map(|w| put(w).is_err()).unwrap_or(true)
-        {
+        let mut delivered = self.maybe_open_logger().is_ok()
+            && self.writer.as_mut().map(|w| put(w).is_ok()).unwrap_or(false);
+        if !delivered && self.open_logger().is_ok() {
             // Try reopening the log file once and retrying as musl does.
-            if !(self.open_logger().is_ok()
-                && self.writer.as_mut().and_then(|w| put(w).ok()).is_some())
-                && self.opt.contains(Config::Console)
+            delivered = self.writer.as_mut().map(|w| put(w).is_ok()).unwrap_or(false);
+        }
+        if !delivered && self.opt.contains(Config::Console) {
+            // Where the journal cannot be written, LOG_CONS sends the message
+            // to the console; without it the message is lost.
+            #[cfg(stafeto)]
             {
-                // TODO: Log error to /dev/console & Redox equivalent
+                use crate::header::fcntl::{O_CLOEXEC, O_NOCTTY, O_WRONLY};
+                if let Ok(mut console) =
+                    crate::fs::File::open(c"/dev/console".into(), O_WRONLY | O_NOCTTY | O_CLOEXEC)
+                {
+                    let _ = console.write_all(wire);
+                }
             }
         }
         if self.opt.contains(Config::PError) {

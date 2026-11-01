@@ -1,8 +1,14 @@
 use core::slice::Split;
 
+use alloc::vec::Vec;
+
 use arrayvec::ArrayVec;
 
-use crate::{c_str::CStr, header::limits::PATH_MAX};
+use crate::{
+    c_str::CStr,
+    header::limits::PATH_MAX,
+    platform::types::c_char,
+};
 
 pub struct PathSearchIter<'a> {
     file_bytes: &'a [u8],
@@ -42,3 +48,31 @@ impl<'a> Iterator for PathSearchIter<'a> {
         None
     }
 }
+
+/// The argument list of the command interpreter that runs a file the system
+/// does not know as a program (ENOEXEC from execvp or posix_spawnp): `sh`,
+/// the file, and the arguments after the first of `argv`.
+///
+/// # Safety
+/// `script` is a NUL-terminated path; `argv` is null or a list of C strings
+/// ended by a null pointer.
+pub(crate) unsafe fn shell_argv(
+    script: *const c_char,
+    argv: *const *mut c_char,
+) -> Vec<*mut c_char> {
+    let mut list: Vec<*mut c_char> = Vec::new();
+    list.push(c"sh".as_ptr().cast_mut());
+    list.push(script.cast_mut());
+    if !argv.is_null() && !unsafe { *argv }.is_null() {
+        let mut at = 1;
+        while !unsafe { *argv.add(at) }.is_null() {
+            list.push(unsafe { *argv.add(at) });
+            at += 1;
+        }
+    }
+    list.push(core::ptr::null_mut());
+    list
+}
+
+/// The shell that runs such a file.
+pub(crate) const SHELL: &core::ffi::CStr = c"/bin/sh";
