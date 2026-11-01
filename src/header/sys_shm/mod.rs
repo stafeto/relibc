@@ -16,10 +16,10 @@ use crate::{
     header::{
         errno::{EFAULT, EINVAL},
         fcntl::{O_CREAT, O_EXCL, O_RDONLY, O_RDWR},
-        sys_stat::{chmod, fchmod, fstat},
+        sys_stat::{fchmod, fstat},
         sys_ipc::{IPC_RMID, IPC_SET, IPC_STAT, ipc_perm},
         sys_mman::{MAP_SHARED, PROT_READ, PROT_WRITE, shm_open, shm_unlink},
-        unistd::{chown, close, ftruncate},
+        unistd::{close, ftruncate},
     },
     platform::{
         self, ipc,
@@ -313,24 +313,12 @@ pub unsafe extern "C" fn shmctl(shmid: c_int, cmd: c_int, buf: *mut shmid_ds) ->
                 Err(errno) => return fail(errno),
             };
             unsafe { remove_file(now.words[15]) };
-            let (old_uid, old_gid, old_mode) = (now.words[1] as u32, now.words[2] as u32, now.words[5] as mode_t);
             let (uid, gid) = (ds.shm_perm.uid as u32, ds.shm_perm.gid as u32);
             let mode = (ds.shm_perm.mode & 0o777) as mode_t;
-            let path = file_path(now.words[14]);
-            // The file follows first, so that the rights of the file and of
-            // the segment never part: a change the file cannot follow (a new
-            // owner or group, which only the superuser may give a file) is
-            // refused, and so is a mode its owner is not allowed to give.
-            let moved = uid != old_uid || gid != old_gid;
-            if moved && unsafe { chown(path.as_ptr(), uid as _, gid as _) } != 0 {
-                return fail(crate::header::errno::EPERM);
-            }
-            if unsafe { chmod(path.as_ptr(), mode) } != 0 {
-                if moved {
-                    let _ = unsafe { chown(path.as_ptr(), old_uid as _, old_gid as _) };
-                }
-                return fail(crate::header::errno::EPERM);
-            }
+            // The services decide: the pipe service checks the owner, the
+            // creator or the privilege and the bits of the mode, and has the
+            // file service give the file of the segment its new owner, group
+            // and mode. The library changes no file.
             let words = [
                 id,
                 IPC_SET as u64,
@@ -344,14 +332,7 @@ pub unsafe extern "C" fn shmctl(shmid: c_int, cmd: c_int, buf: *mut shmid_ds) ->
                     unsafe { remove_file(reply.words[2]) };
                     0
                 }
-                Err(errno) => {
-                    // The segment did not change: nor does its file.
-                    let _ = unsafe { chmod(path.as_ptr(), old_mode) };
-                    if moved {
-                        let _ = unsafe { chown(path.as_ptr(), old_uid as _, old_gid as _) };
-                    }
-                    fail(errno)
-                }
+                Err(errno) => fail(errno),
             }
         }
         _ => fail(EINVAL),
