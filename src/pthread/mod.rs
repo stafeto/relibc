@@ -360,6 +360,14 @@ unsafe extern "C" fn new_thread_shim(
 
     unsafe { (&*synchronization_mutex).manual_unlock() };
 
+    // The creator returns from pthread_create before the program's code of
+    // the new thread runs: the thread waits for the creator to register it.
+    // A thread of a higher priority still preempts the creator at once.
+    #[cfg(stafeto)]
+    while tcb.pthread.registered.load(Ordering::SeqCst) == 0 {
+        crate::sync::futex_wait(&tcb.pthread.registered, 0, None);
+    }
+
     #[cfg(target_os = "redox")]
     {
         redox_rt::signal::set_sigmask(Some(procmask), None)
