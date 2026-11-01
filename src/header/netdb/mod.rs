@@ -804,7 +804,9 @@ fn find_service(name: &[u8], proto: Option<&[u8]>) -> Option<ServiceLine> {
             if !official.eq_ignore_ascii_case(name) && !words.any(|a| a.eq_ignore_ascii_case(name)) {
                 continue;
             }
-            let port = core::str::from_utf8(port).ok()?.parse::<u16>().ok()?;
+            let Some(port) = core::str::from_utf8(port).ok().and_then(|p| p.parse::<u16>().ok()) else {
+                continue;
+            };
             if official.len() >= 64 || line_proto.len() >= 16 {
                 continue;
             }

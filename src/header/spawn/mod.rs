@@ -111,7 +111,33 @@ pub unsafe extern "C" fn posix_spawnp(
 ) -> c_int {
     let program = unsafe { CStr::from_ptr(file) };
     if program.contains(b'/') {
-        return unsafe { posix_spawn(pid, file, file_actions, attrp, argv, envp) };
+        let status = unsafe { posix_spawn(pid, file, file_actions, attrp, argv, envp) };
+        if cfg!(stafeto) && status == errno::ENOEXEC && !argv.is_null() {
+            // A file that is no program runs with the shell, as for a name
+            // without a slash.
+            let list = unsafe { shell_argv(file, argv) };
+            let shell = unsafe { NulTerminated::new(list.as_ptr()) }.unwrap();
+            let environment = unsafe { NulTerminated::new(envp) };
+            return match unsafe {
+                platform::Sys::spawn(
+                    CStr::from_ptr(SHELL.as_ptr()),
+                    file_actions.as_ref(),
+                    attrp.as_ref(),
+                    shell,
+                    environment,
+                )
+            } {
+                Ok(v) => {
+                    if let Some(pid) = unsafe { pid.as_mut() } {
+                        *pid = v;
+                    }
+                    0
+                }
+                Err(second) if second.0 == errno::ENOENT => status,
+                Err(second) => second.0,
+            };
+        }
+        return status;
     }
     let (argv_ptr, envp_ptr) = (argv, envp);
     let argv = {
