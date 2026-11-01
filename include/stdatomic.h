@@ -76,6 +76,76 @@ typedef _Atomic __INTMAX_TYPE__ atomic_intmax_t;
 typedef _Atomic __UINTMAX_TYPE__ atomic_uintmax_t;        
 
 
+#if defined(__clang__)
+
+/* Clang takes the operations on an _Atomic object as the __c11_atomic
+   builtins; its __atomic builtins refuse an _Atomic address. */
+
+#define ATOMIC_VAR_INIT(VALUE) (VALUE)
+#define atomic_init(PTR, VAL) __c11_atomic_init (PTR, VAL)
+#define kill_dependency(Y) (Y)
+
+extern void atomic_thread_fence (memory_order);
+#define atomic_thread_fence(MO) __c11_atomic_thread_fence (MO)
+extern void atomic_signal_fence (memory_order);
+#define atomic_signal_fence(MO) __c11_atomic_signal_fence (MO)
+#define atomic_is_lock_free(OBJ) __c11_atomic_is_lock_free (sizeof (*(OBJ)))
+
+#define ATOMIC_BOOL_LOCK_FREE		__CLANG_ATOMIC_BOOL_LOCK_FREE
+#define ATOMIC_CHAR_LOCK_FREE		__CLANG_ATOMIC_CHAR_LOCK_FREE
+#define ATOMIC_CHAR16_T_LOCK_FREE	__CLANG_ATOMIC_CHAR16_T_LOCK_FREE
+#define ATOMIC_CHAR32_T_LOCK_FREE	__CLANG_ATOMIC_CHAR32_T_LOCK_FREE
+#define ATOMIC_WCHAR_T_LOCK_FREE	__CLANG_ATOMIC_WCHAR_T_LOCK_FREE
+#define ATOMIC_SHORT_LOCK_FREE		__CLANG_ATOMIC_SHORT_LOCK_FREE
+#define ATOMIC_INT_LOCK_FREE		__CLANG_ATOMIC_INT_LOCK_FREE
+#define ATOMIC_LONG_LOCK_FREE		__CLANG_ATOMIC_LONG_LOCK_FREE
+#define ATOMIC_LLONG_LOCK_FREE		__CLANG_ATOMIC_LLONG_LOCK_FREE
+#define ATOMIC_POINTER_LOCK_FREE	__CLANG_ATOMIC_POINTER_LOCK_FREE
+
+#define atomic_store_explicit(PTR, VAL, MO) __c11_atomic_store (PTR, VAL, MO)
+#define atomic_store(PTR, VAL) atomic_store_explicit (PTR, VAL, __ATOMIC_SEQ_CST)
+
+#define atomic_load_explicit(PTR, MO) __c11_atomic_load (PTR, MO)
+#define atomic_load(PTR) atomic_load_explicit (PTR, __ATOMIC_SEQ_CST)
+
+#define atomic_exchange_explicit(PTR, VAL, MO) __c11_atomic_exchange (PTR, VAL, MO)
+#define atomic_exchange(PTR, VAL) atomic_exchange_explicit (PTR, VAL, __ATOMIC_SEQ_CST)
+
+#define atomic_compare_exchange_strong_explicit(PTR, VAL, DES, SUC, FAIL) \
+  __c11_atomic_compare_exchange_strong (PTR, VAL, DES, SUC, FAIL)
+#define atomic_compare_exchange_strong(PTR, VAL, DES) \
+  atomic_compare_exchange_strong_explicit (PTR, VAL, DES, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
+
+#define atomic_compare_exchange_weak_explicit(PTR, VAL, DES, SUC, FAIL) \
+  __c11_atomic_compare_exchange_weak (PTR, VAL, DES, SUC, FAIL)
+#define atomic_compare_exchange_weak(PTR, VAL, DES) \
+  atomic_compare_exchange_weak_explicit (PTR, VAL, DES, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
+
+#define atomic_fetch_add_explicit(PTR, VAL, MO) __c11_atomic_fetch_add (PTR, VAL, MO)
+#define atomic_fetch_add(PTR, VAL) atomic_fetch_add_explicit (PTR, VAL, __ATOMIC_SEQ_CST)
+#define atomic_fetch_sub_explicit(PTR, VAL, MO) __c11_atomic_fetch_sub (PTR, VAL, MO)
+#define atomic_fetch_sub(PTR, VAL) atomic_fetch_sub_explicit (PTR, VAL, __ATOMIC_SEQ_CST)
+#define atomic_fetch_or_explicit(PTR, VAL, MO) __c11_atomic_fetch_or (PTR, VAL, MO)
+#define atomic_fetch_or(PTR, VAL) atomic_fetch_or_explicit (PTR, VAL, __ATOMIC_SEQ_CST)
+#define atomic_fetch_xor_explicit(PTR, VAL, MO) __c11_atomic_fetch_xor (PTR, VAL, MO)
+#define atomic_fetch_xor(PTR, VAL) atomic_fetch_xor_explicit (PTR, VAL, __ATOMIC_SEQ_CST)
+#define atomic_fetch_and_explicit(PTR, VAL, MO) __c11_atomic_fetch_and (PTR, VAL, MO)
+#define atomic_fetch_and(PTR, VAL) atomic_fetch_and_explicit (PTR, VAL, __ATOMIC_SEQ_CST)
+
+typedef struct atomic_flag { atomic_bool _Value; } atomic_flag;
+
+#define ATOMIC_FLAG_INIT { 0 }
+
+#define atomic_flag_test_and_set_explicit(PTR, MO) \
+  __c11_atomic_exchange (&(PTR)->_Value, 1, MO)
+#define atomic_flag_test_and_set(PTR) \
+  atomic_flag_test_and_set_explicit (PTR, __ATOMIC_SEQ_CST)
+#define atomic_flag_clear_explicit(PTR, MO) \
+  __c11_atomic_store (&(PTR)->_Value, 0, MO)
+#define atomic_flag_clear(PTR) atomic_flag_clear_explicit (PTR, __ATOMIC_SEQ_CST)
+
+#else /* GCC */
+
 #define ATOMIC_VAR_INIT(VALUE)	(VALUE)
 
 /* Initialize an atomic object pointed to by PTR with VAL.  */
@@ -239,5 +309,7 @@ extern void atomic_flag_clear (volatile atomic_flag *);
 #define atomic_flag_clear(PTR)	__atomic_clear ((PTR), __ATOMIC_SEQ_CST)
 extern void atomic_flag_clear_explicit (volatile atomic_flag *, memory_order);
 #define atomic_flag_clear_explicit(PTR, MO)   __atomic_clear ((PTR), (MO))
+
+#endif /* __clang__ */
 
 #endif  /* _STDATOMIC_H */
