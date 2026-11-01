@@ -447,6 +447,15 @@ pub(crate) unsafe fn init() {
 /// comes last). The streams' locks are not taken: a thread may hold one
 /// through a read of the console with no end, and the child frees them.
 extern "C" fn fork_prepare() {
+    // The locks of the threads of the library (the lanes of aio, the timers),
+    // of the list of open streams and of the memory streams come first, as
+    // relibc's other locks do: the handlers of the program have run by now
+    // and may call timer_gettime or aio_error, and a handler that waits for a
+    // lock of the program does not wait for a thread that stands on one of
+    // these. Their nesting: aio, timers, streams, memory streams.
+    unsafe { crate::header::aio::fork_prepare(); }
+    unsafe { crate::header::time::thread_timer::fork_prepare(); }
+    crate::header::stdio::fork_prepare();
     crate::header::pthread::tls::fork_lock();
     crate::header::time::fork_lock();
     crate::pthread::fork_lock();
@@ -459,6 +468,9 @@ extern "C" fn fork_parent() {
     crate::pthread::fork_unlock_parent();
     crate::header::time::fork_unlock();
     crate::header::pthread::tls::fork_unlock();
+    crate::header::stdio::fork_parent();
+    unsafe { crate::header::time::thread_timer::fork_parent(); }
+    unsafe { crate::header::aio::fork_parent(); }
 }
 
 /// fork's child handler: the locks of `fork_prepare` go, the table of
@@ -477,6 +489,12 @@ extern "C" fn fork_child() {
             stream.reset_lock_after_fork();
         }
     }
+    // The open streams too (a thread of the parent may have held the lock of
+    // one, and the child's exit would wait for it), then the locks of the
+    // library's threads.
+    stdio::fork_child();
+    unsafe { crate::header::time::thread_timer::fork_child(); }
+    unsafe { crate::header::aio::fork_child(); }
 }
 
 /// The end of `fork`, after relibc let go of its locks: pending signals are

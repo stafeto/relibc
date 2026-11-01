@@ -116,3 +116,14 @@ pub fn close(fd: c_int) {
         *slot = None;
     }
 }
+
+/// `fork`, in the parent before the copy: the table is locked, so that no
+/// thread of the parent is inside it in the child.
+pub(crate) fn fork_prepare() {
+    unsafe { TABLE.manual_lock() };
+}
+
+/// `fork`, in the parent or the child after the copy.
+pub(crate) fn fork_release() {
+    unsafe { TABLE.manual_unlock() };
+}

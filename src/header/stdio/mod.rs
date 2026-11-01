@@ -606,6 +606,12 @@ pub unsafe extern "C" fn fclose(stream: *mut FILE) -> c_int {
 /// Open a file from a file descriptor
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fdopen(fildes: c_int, mode: *const c_char) -> *mut FILE {
+    // A number below zero is no descriptor (those below -1 are the content of
+    // a stream over memory, which no program names).
+    if fildes < 0 {
+        platform::ERRNO.set(errno::EBADF);
+        return ptr::null_mut();
+    }
     helpers::_fdopen(fildes, unsafe { CStr::from_ptr(mode) })
         .map(Box::into_raw)
         .map(track)
@@ -1933,8 +1939,13 @@ pub unsafe fn flush_io_streams() {
 /// Flushes a stream for the last time and keeps its lock.
 fn flush_final(stream: *mut FILE) {
     let stream = unsafe { &mut *stream };
+    // A stream with nothing to write is left alone, read without its lock: a
+    // thread that waits in a read of a stream for reading and writing holds
+    // the lock and does not hold the exit. (A write that lands now is lost,
+    // as one after the exit would be; a stream with something in its buffer is
+    // locked, so no line of it is torn.)
     if stream.flags & constants::F_NOWR != 0
-        || matches!(stream.writer, FileInnerWriter::Unbuffered(_))
+        || (stream.writer.pending() == 0 && stream.gather.is_null())
     {
         let _ = stream.flush();
         return;
@@ -1969,6 +1980,32 @@ pub(crate) fn track(stream: *mut FILE) -> *mut FILE {
     OPEN_STREAMS.lock().push(stream as usize);
     FLUSH_OPEN.store(flush_open_streams as fn() as *mut (), Ordering::Release);
     stream
+}
+
+/// `fork`, in the parent before the copy: the list of open streams and the
+/// table of memory streams are locked (the locks of the streams are not: a
+/// thread may hold one through a read with no end).
+pub(crate) fn fork_prepare() {
+    unsafe { OPEN_STREAMS.manual_lock() };
+    memfile::fork_prepare();
+}
+
+/// `fork`, in the parent after the copy.
+pub(crate) fn fork_parent() {
+    memfile::fork_release();
+    unsafe { OPEN_STREAMS.manual_unlock() };
+}
+
+/// `fork`, in the child: the lock of every open stream is free again (the
+/// thread of the parent that held one is not in the child, and the exit of
+/// the child takes the locks), then the list and the table.
+pub(crate) fn fork_child() {
+    // SAFETY: the list is locked by this thread (fork_prepare).
+    for &stream in unsafe { &*OPEN_STREAMS.as_ptr() }.iter() {
+        unsafe { (*(stream as *mut FILE)).reset_lock_after_fork() };
+    }
+    memfile::fork_release();
+    unsafe { OPEN_STREAMS.manual_unlock() };
 }
 
 /// Takes a stream out of the list as it closes.
