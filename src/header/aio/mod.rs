@@ -145,6 +145,31 @@ fn lock() -> crate::sync::MutexGuard<'static, State> {
     state
 }
 
+/// `fork`, in the parent before the copy: no thread of the parent holds the
+/// lock of the lanes in the child. (The lock comes before the locks of the
+/// timers, which the notice of a request may take.)
+#[cfg(stafeto)]
+pub(crate) unsafe fn fork_prepare() {
+    unsafe { STATE.manual_lock() };
+}
+
+/// `fork`, in the parent after the copy.
+#[cfg(stafeto)]
+pub(crate) unsafe fn fork_parent() {
+    unsafe { STATE.manual_unlock() };
+}
+
+/// `fork`, in the child: it has none of the threads of the lanes.
+#[cfg(stafeto)]
+pub(crate) unsafe fn fork_child() {
+    unsafe {
+        let state = &mut *STATE.as_ptr();
+        state.lanes.clear();
+        state.owner = getpid();
+        STATE.manual_unlock();
+    }
+}
+
 fn state_of(cb: *const aiocb) -> &'static AtomicI32 {
     unsafe { AtomicI32::from_ptr(ptr::addr_of!((*cb).__error).cast_mut()) }
 }

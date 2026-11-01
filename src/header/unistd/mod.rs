@@ -504,6 +504,14 @@ pub unsafe extern "C" fn fork() -> pid_t {
     // establishment, the parent and child handlers in that order (POSIX
     // pthread_atfork).
     unsafe { crate::header::pthread::FORK_HOOKS_LOCK.manual_lock() };
+    // The locks of the library's own threads (the lanes of aio, the helpers
+    // of the timers) are taken before the handlers of the program, and given
+    // back after them.
+    #[cfg(stafeto)]
+    unsafe {
+        crate::header::aio::fork_prepare();
+        crate::header::time::thread_timer::fork_prepare();
+    }
     for prepare in unsafe { &fork_hooks[0] }.iter().rev() {
         prepare();
     }
@@ -512,12 +520,22 @@ pub unsafe extern "C" fn fork() -> pid_t {
         for child in unsafe { &fork_hooks[2] } {
             child();
         }
+        #[cfg(stafeto)]
+        unsafe {
+            crate::header::time::thread_timer::fork_child();
+            crate::header::aio::fork_child();
+        }
     } else {
         // A fork that failed runs the parent handlers too, so that what
         // the prepare handlers took goes again, with fork's errno kept.
         let errno = ERRNO.get();
         for parent in unsafe { &fork_hooks[1] } {
             parent();
+        }
+        #[cfg(stafeto)]
+        unsafe {
+            crate::header::time::thread_timer::fork_parent();
+            crate::header::aio::fork_parent();
         }
         ERRNO.set(errno);
     }

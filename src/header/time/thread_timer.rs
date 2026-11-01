@@ -25,7 +25,7 @@
 //! counts in the timers of the process.
 
 use crate::platform::sys::timer_fire;
-use alloc::boxed::Box;
+use alloc::{boxed::Box, vec::Vec};
 use core::{
     mem::MaybeUninit,
     ptr,
@@ -122,13 +122,67 @@ fn valid(at: &timespec) -> bool {
     at.tv_sec >= 0 && (0..NANOS as i64).contains(&(at.tv_nsec as i64))
 }
 
-/// The timer of an identifier of this module, if it is one.
+/// The addresses of the timers that exist (made, not yet freed by their
+/// helper). A child of `fork` has none: the helpers are not in it. `fork`
+/// takes this lock after the one of ITIMERS and before the locks of the timers.
+static REGISTRY: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// The timer of an identifier of this module, if it is one and exists.
 fn timer_of(id: timer_t) -> Option<&'static Timer> {
     let id = id as usize;
     if id & TAG == 0 {
         return None;
     }
-    Some(unsafe { &*((id & !TAG) as *const Timer) })
+    let address = id & !TAG;
+    if !REGISTRY.lock().contains(&address) {
+        return None;
+    }
+    Some(unsafe { &*(address as *const Timer) })
+}
+
+fn unregister(address: usize) {
+    let mut registry = REGISTRY.lock();
+    if let Some(at) = registry.iter().position(|&a| a == address) {
+        registry.swap_remove(at);
+    }
+}
+
+/// `fork`, in the parent before the copy: the locks of the timers (ITIMERS,
+/// REGISTRY, each timer's), always in this order, so that no thread of the
+/// parent holds one in the child. The helpers wait on them meanwhile.
+pub(crate) unsafe fn fork_prepare() {
+    unsafe {
+        ITIMERS.manual_lock();
+        let registry = REGISTRY.manual_lock();
+        for &address in registry.iter() {
+            (*(address as *const Timer)).inner.manual_lock();
+        }
+    }
+}
+
+unsafe fn fork_release() {
+    unsafe {
+        let registry = &*REGISTRY.as_ptr();
+        for &address in registry.iter() {
+            (*(address as *const Timer)).inner.manual_unlock();
+        }
+        REGISTRY.manual_unlock();
+        ITIMERS.manual_unlock();
+    }
+}
+
+/// `fork`, in the parent after the copy.
+pub(crate) unsafe fn fork_parent() {
+    unsafe { fork_release() };
+}
+
+/// `fork`, in the child: the timers are not inherited, and the helpers that
+/// kept them are not in the child.
+pub(crate) unsafe fn fork_child() {
+    unsafe {
+        fork_release();
+        REGISTRY.lock().clear();
+    }
 }
 
 pub fn is_thread_timer(id: timer_t) -> bool {
@@ -152,6 +206,7 @@ extern "C" fn helper(arg: *mut c_void) -> *mut c_void {
             let mut inner = timer.inner.lock();
             if timer.gone.load(Ordering::Acquire) {
                 drop(inner);
+                unregister(arg as usize);
                 drop(unsafe { Box::from_raw(arg.cast::<Timer>()) });
                 return ptr::null_mut();
             }
@@ -172,6 +227,12 @@ extern "C" fn helper(arg: *mut c_void) -> *mut c_void {
                         1
                     };
                     drop(inner);
+                    // A new setting made since the count was taken (it raised
+                    // the epoch under the lock) ends the expiry of the old: no
+                    // notice of the old setting comes after the new one.
+                    if timer.epoch.load(Ordering::SeqCst) != seen {
+                        continue;
+                    }
                     let remote = timer.remote.load(Ordering::Acquire);
                     if remote != 0 {
                         timer_fire(remote, count);
@@ -234,6 +295,7 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
         gone: AtomicBool::new(false),
     }));
     let id = (timer as usize | TAG) as timer_t;
+    REGISTRY.lock().push(timer as usize);
     // A signal with the number of the timer as its value (the default
     // notice) is a plain signal here.
     if unsafe { (*timer).event.sigev_notify } & 0xFF == SIGEV_SIGNAL {
@@ -254,6 +316,7 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
         match Sys::timer_create(CLOCK_MONOTONIC, &remote_event) {
             Ok(remote) => unsafe { (*timer).remote.store(remote as usize, Ordering::Release) },
             Err(error) => {
+                unregister(timer as usize);
                 drop(unsafe { Box::from_raw(timer) });
                 return Err(error);
             }
@@ -287,6 +350,7 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
         if remote != 0 {
             let _ = Sys::timer_delete(remote as timer_t);
         }
+        unregister(timer as usize);
         drop(unsafe { Box::from_raw(timer) });
         return Err(Errno(crate::header::errno::EAGAIN));
     }
@@ -368,8 +432,11 @@ pub fn settime(id: timer_t, flags: c_int, value: &itimerspec) -> Option<Result<i
         inner.armed = true;
     }
     let remote = timer.remote.load(Ordering::Acquire);
+    // The epoch rises under the lock: the helper that counted an expiry of
+    // the old setting sees it before it gives the notice.
+    timer.epoch.fetch_add(1, Ordering::SeqCst);
     drop(inner);
-    changed(timer);
+    futex_wake(&timer.epoch, 1);
     if remote != 0 {
         // A new setting starts a new signal: the service forgets the overrun
         // of the last (a disarming of its place, which never arms).

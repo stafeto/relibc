@@ -41,7 +41,7 @@ mod strftime;
 mod strptime;
 mod tzfile;
 #[cfg(stafeto)]
-mod thread_timer;
+pub(crate) mod thread_timer;
 #[cfg(stafeto)]
 pub(crate) use thread_timer::interval_timer;
 pub use strptime::strptime;
