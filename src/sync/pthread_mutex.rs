@@ -168,13 +168,13 @@ impl RlctMutex {
     /// The locking word becomes free and one waiter wakes.
     fn release_word(&self) {
         // One waiter at a time: it takes the lock with WAITING_BIT, so the
-        // next unlock wakes the next one. With PTHREAD_PRIO_INHERIT all
-        // wake: those that lose the race wait for the new owner and lend it
-        // their level, and this thread's level, raised for them, is worked
-        // out again.
+        // next unlock wakes the next one. With PTHREAD_PRIO_INHERIT the layer
+        // wakes the first of the queue (the highest level) and the others
+        // wait for it and lend it their level, and this thread's level,
+        // raised for them, is worked out again.
         if self.inner.swap(STATE_UNLOCKED, Ordering::Release) & WAITING_BIT != 0 {
             if self.protocol() == PTHREAD_PRIO_INHERIT {
-                unsafe { crate::platform::sys::futex_wake_pi(self.inner.as_ptr(), u32::MAX) };
+                unsafe { crate::platform::sys::futex_wake_pi(self.inner.as_ptr(), 1) };
             } else {
                 crate::sync::futex_wake(&self.inner, 1);
             }
