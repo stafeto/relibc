@@ -158,6 +158,7 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_THREAD_PRIORITY_SCHEDULING
         | _SC_THREAD_PRIO_INHERIT
         | _SC_THREAD_PRIO_PROTECT
+        | _SC_THREAD_PROCESS_SHARED
         | _SC_SEMAPHORES
         | _SC_SPAWN
         | _SC_THREADS
@@ -201,8 +202,7 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         // the platform has no such service. The XSI option is not claimed;
         // the Shell and Utilities volume (_SC_2_VERSION) waits for the
         // utilities of 5n.
-        _SC_THREAD_PROCESS_SHARED
-        | _SC_ADVISORY_INFO
+        _SC_ADVISORY_INFO
         | _SC_IPV6
         | _SC_RAW_SOCKETS
         | _SC_2_VERSION
