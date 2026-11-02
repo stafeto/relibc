@@ -54,19 +54,28 @@ pub const RTLD_DEFAULT: *mut c_void = 0 as *mut c_void; // XXX: cbindgen doesn't
 #[cfg_attr(stafeto, allow(dead_code))]
 static ERROR_NOT_SUPPORTED: &core::ffi::CStr = c"dlfcn not supported";
 
-/// stafeto links every program statically: no shared object is loaded and a
-/// program carries no table of symbols. `dlopen(NULL)` answers a handle of
-/// the program all the same, as the standard says, which `dlsym` finds no
-/// symbol in and `dlclose` accepts; every other call says why it fails.
+/// stafeto: a program is linked statically, or dynamically against libc.so
+/// (spec 2, 3.12.5). `dlopen(NULL)` answers the handle of the global scope
+/// (the program and libc.so), which `dlsym` searches through the layer and
+/// `dlclose` accepts; `dlopen` of a path says that it loads no new library.
+/// None of it builds relibc's own `Linker`, which would read `LD_LIBRARY_PATH`
+/// and `LD_BIND_NOW` from the environment of a set-ID program.
 #[cfg(stafeto)]
 mod fixed {
     pub static PROGRAM: u8 = 0;
-    pub const NO_OBJECTS: &core::ffi::CStr =
-        c"dlopen: this system links programs statically and loads no shared object";
-    pub const NO_SYMBOLS: &core::ffi::CStr =
-        c"dlsym: the program carries no table of symbols to search by name";
-    pub const NO_HANDLE: &core::ffi::CStr = c"dlclose: not a handle that dlopen gave";
+    pub const NO_OBJECTS: &core::ffi::CStr = c"loading of new libraries is not supported";
+    pub const NO_SYMBOL: &core::ffi::CStr = c"dlsym: symbol not found";
+    pub const NO_NAME: &core::ffi::CStr = c"dlsym: no symbol name";
+    pub const NO_HANDLE: &core::ffi::CStr = c"not a handle that dlopen gave";
     pub const NO_MODE: &core::ffi::CStr = c"dlopen: the mode has neither RTLD_LAZY nor RTLD_NOW";
+}
+
+#[cfg(stafeto)]
+unsafe extern "C" {
+    /// The layer's search of the global scope: the address of the defined
+    /// symbol `name` in the program (headers `phdr`, `phnum`) and then in
+    /// libc.so (its ELF header at `base`, 0 for a static program), 0 for none.
+    fn stafeto_dlsym(name: *const c_char, phdr: usize, phnum: usize, base: usize) -> usize;
 }
 
 #[thread_local]
@@ -176,9 +185,28 @@ pub unsafe extern "C" fn dlopen(cfilename: *const c_char, flags: c_int) -> *mut 
 pub unsafe extern "C" fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void {
     #[cfg(stafeto)]
     {
-        let _ = (handle, symbol);
-        ERROR.store(fixed::NO_SYMBOLS.as_ptr() as usize, Ordering::SeqCst);
-        return ptr::null_mut();
+        use crate::{
+            header::sys_auxv::getauxval,
+            platform::auxv_defs::{AT_BASE, AT_PHDR, AT_PHNUM},
+        };
+        let program = (&raw const fixed::PROGRAM).cast_mut().cast::<c_void>();
+        if !handle.is_null() && handle != program {
+            ERROR.store(fixed::NO_HANDLE.as_ptr() as usize, Ordering::SeqCst);
+            return ptr::null_mut();
+        }
+        if symbol.is_null() {
+            ERROR.store(fixed::NO_NAME.as_ptr() as usize, Ordering::SeqCst);
+            return ptr::null_mut();
+        }
+        let value = |key: usize| getauxval(key as _) as usize;
+        // SAFETY: `symbol` is the caller's NUL-terminated name; the layer
+        // reads the tables of the two modules the loader placed.
+        let found =
+            unsafe { stafeto_dlsym(symbol, value(AT_PHDR), value(AT_PHNUM), value(AT_BASE)) };
+        if found == 0 {
+            ERROR.store(fixed::NO_SYMBOL.as_ptr() as usize, Ordering::SeqCst);
+        }
+        return found as *mut c_void;
     }
     #[cfg(not(stafeto))]
     {

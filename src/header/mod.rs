@@ -110,6 +110,7 @@ pub mod langinfo;
 pub mod libgen;
 pub mod libintl;
 pub mod limits;
+pub mod link;
 pub mod locale;
 pub mod malloc;
 // TODO unfinished, unguard feature when ready

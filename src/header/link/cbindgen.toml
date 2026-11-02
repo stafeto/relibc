@@ -1,0 +1,16 @@
+# Not in POSIX: glibc's <link.h> as far as dl_iterate_phdr goes.
+after_includes = """
+#include <elf.h>
+#include <stddef.h>
+"""
+include_guard = "_RELIBC_LINK_H"
+language = "C"
+style = "Tag"
+no_includes = true
+cpp_compat = true
+
+[enum]
+prefix_with_name = true
+
+[export]
+include = ["dl_phdr_info"]
