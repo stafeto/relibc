@@ -505,6 +505,16 @@ pub fn current_thread() -> Option<&'static Pthread> {
     unsafe { Tcb::current().map(|p| &p.pthread) }
 }
 
+/// A cancellation point that runs `before` when the thread is about to end
+/// (stafeto): the semaphore passes a wake on.
+#[cfg(stafeto)]
+pub unsafe fn testcancel_before(before: impl FnOnce()) {
+    if crate::platform::sys::testcancel() {
+        before();
+        unsafe { cancel_current_thread() };
+    }
+}
+
 pub unsafe fn testcancel() {
     // stafeto: the request and the state live in the platform's thread
     // block; it says whether this point acts.

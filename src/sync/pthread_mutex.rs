@@ -486,7 +486,9 @@ fn owner_thread(word: u32) -> u32 {
 /// mutex shared between processes tells their threads apart (the number of a
 /// thread is its place in its process, 64 places), and the number of the
 /// thread in the low eight. Worked out at each call: a child of fork has
-/// another PID.
+/// another PID. The PID keeps 23 bits (the word has 31): a PID 2^23 above the
+/// owner's can only be that of a process that came after the owner's place
+/// was used 32,768 times over, so it matches a dead owner at most.
 #[cfg(stafeto)]
 fn os_tid_invalid_after_fork() -> u32 {
     let tid = Sys::gettid().cast_unsigned() & THREAD_BITS;

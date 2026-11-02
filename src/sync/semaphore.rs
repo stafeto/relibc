@@ -16,6 +16,11 @@ use crate::{
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
+// The semaphore lives in a `sem_t`.
+const _: () = assert!(
+    core::mem::size_of::<Semaphore>() <= core::mem::size_of::<crate::header::semaphore::sem_t>()
+);
+
 pub struct Semaphore {
     count: AtomicU32,
     /// The threads in a wait by address on `count` (stafeto: a post wakes one
@@ -75,12 +80,11 @@ impl Semaphore {
             // A cancellation point (sem_wait, sem_timedwait): on stafeto a
             // request wakes the wait by address, which comes back here. A
             // wake that is meant for another waiter goes on before this
-            // thread may end.
+            // thread ends.
             #[cfg(stafeto)]
-            {
-                self.pass_on();
-                unsafe { crate::pthread::testcancel() };
-            }
+            unsafe {
+                crate::pthread::testcancel_before(|| self.pass_on())
+            };
             if self.try_wait() {
                 return Ok(());
             }
@@ -108,7 +112,10 @@ impl Semaphore {
                 self.waiters.fetch_add(1, Ordering::SeqCst);
                 let result = unsafe { Sys::futex_wait(self.count.ptr(), 0, None) };
                 self.waiters.fetch_sub(1, Ordering::SeqCst);
-                Self::waited(result)?;
+                if let Err(error) = Self::waited(result) {
+                    self.pass_on();
+                    return Err(error);
+                }
             }
         }
     }
