@@ -382,6 +382,19 @@ pub unsafe extern "C" fn exit(status: c_int) -> ! {
         (unsafe { *f })();
     }
 
+    // A dynamically linked program: its DT_FINI_ARRAY, backwards, after the
+    // atexit functions (the array above is the library's own).
+    #[cfg(stafeto)]
+    {
+        use core::sync::atomic::Ordering;
+        let start = crate::start::PROGRAM_FINI.0.load(Ordering::Relaxed) as *const extern "C" fn();
+        let mut count = crate::start::PROGRAM_FINI.1.load(Ordering::Relaxed);
+        while count > 0 {
+            count -= 1;
+            (unsafe { *start.add(count) })();
+        }
+    }
+
     unsafe { ld_so::fini() };
 
     // The streams are flushed and locked first: a thread that a request of

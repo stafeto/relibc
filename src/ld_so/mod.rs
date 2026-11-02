@@ -120,6 +120,13 @@ fn static_init(
         // let vaddr = ph.p_vaddr as usize - voff;
         let vsize = (p_memsz + voff).div_ceil(page_size) * page_size;
 
+        // The loader named a header that is no PT_TLS: its fault, and the
+        // process ends with the code of a refused start.
+        #[cfg(stafeto)]
+        if tls_opt.is_some() && p_type != elf::PT_TLS {
+            Sys::exit(125);
+        }
+
         if p_type == elf::PT_TLS {
             let valign = if p_align > 0 {
                 p_memsz.div_ceil(p_align) * p_align

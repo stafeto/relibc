@@ -148,7 +148,16 @@ extern "C" fn init_array() {
 struct ProgramArrays {
     preinit: (*const extern "C" fn(), usize),
     init: (*const extern "C" fn(), usize),
+    fini: (*const extern "C" fn(), usize),
 }
+
+/// The `DT_FINI_ARRAY` of a dynamically linked program: start and count, for
+/// `exit` (count 0 for a static program).
+#[cfg(stafeto)]
+pub static PROGRAM_FINI: (core::sync::atomic::AtomicUsize, core::sync::atomic::AtomicUsize) = (
+    core::sync::atomic::AtomicUsize::new(0),
+    core::sync::atomic::AtomicUsize::new(0),
+);
 
 /// None for a program that is linked statically (no `AT_STAFETO_TLS`), whose
 /// arrays the linker bounded with `__init_array_start` and its kin.
@@ -160,6 +169,8 @@ unsafe fn program_arrays(sp: &Stack) -> Option<ProgramArrays> {
     const DT_NULL: u64 = 0;
     const DT_INIT_ARRAY: u64 = 25;
     const DT_INIT_ARRAYSZ: u64 = 27;
+    const DT_FINI_ARRAY: u64 = 26;
+    const DT_FINI_ARRAYSZ: u64 = 28;
     const DT_PREINIT_ARRAY: u64 = 32;
     const DT_PREINIT_ARRAYSZ: u64 = 33;
     // Elf64_Phdr: p_type u32 at 0, p_vaddr u64 at 16.
@@ -178,8 +189,13 @@ unsafe fn program_arrays(sp: &Stack) -> Option<ProgramArrays> {
         }
         auxv = unsafe { auxv.add(1) };
     }
-    if !dynamic || phent != PHDR64 {
+    if !dynamic {
         return None;
+    }
+    // The loader wrote the vector: a header size it cannot read is a fault
+    // of the loader, and the process ends with the code of a refused start.
+    if phent != PHDR64 {
+        Sys::exit(125);
     }
     let mut bias = 0usize;
     let mut dynamic_at = None;
@@ -197,6 +213,7 @@ unsafe fn program_arrays(sp: &Stack) -> Option<ProgramArrays> {
     }
     let mut entry = dynamic_at?.wrapping_add(bias) as *const u64;
     let (mut preinit, mut preinit_size, mut init, mut init_size) = (0u64, 0u64, 0u64, 0u64);
+    let (mut fini, mut fini_size) = (0u64, 0u64);
     loop {
         let tag = unsafe { entry.read() };
         let value = unsafe { entry.add(1).read() };
@@ -206,6 +223,8 @@ unsafe fn program_arrays(sp: &Stack) -> Option<ProgramArrays> {
             DT_PREINIT_ARRAYSZ => preinit_size = value,
             DT_INIT_ARRAY => init = value,
             DT_INIT_ARRAYSZ => init_size = value,
+            DT_FINI_ARRAY => fini = value,
+            DT_FINI_ARRAYSZ => fini_size = value,
             _ => (),
         }
         entry = unsafe { entry.add(2) };
@@ -220,6 +239,7 @@ unsafe fn program_arrays(sp: &Stack) -> Option<ProgramArrays> {
     Some(ProgramArrays {
         preinit: array(preinit, preinit_size),
         init: array(init, init_size),
+        fini: array(fini, fini_size),
     })
 }
 
@@ -348,6 +368,8 @@ pub unsafe extern "C" fn relibc_start_v1(
     let program = unsafe { program_arrays(sp) };
     #[cfg(stafeto)]
     if let Some(program) = &program {
+        PROGRAM_FINI.0.store(program.fini.0 as usize, core::sync::atomic::Ordering::Relaxed);
+        PROGRAM_FINI.1.store(program.fini.1, core::sync::atomic::Ordering::Relaxed);
         unsafe { run_array(program.preinit) };
     }
 
