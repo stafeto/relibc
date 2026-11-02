@@ -401,6 +401,27 @@ pub(crate) fn timer_fire(timer: usize, count: u64) {
     unsafe { stafeto_timer_fire(timer, count) };
 }
 
+unsafe extern "C" {
+    /// The layer's search of the global scope: the address of the defined
+    /// symbol `name` in the program (headers `phdr`, `phnum`) and then in
+    /// libc.so (its ELF header at `base`, 0 for a static program), 0 for none.
+    fn stafeto_dlsym(name: *const c_char, phdr: usize, phnum: usize, base: usize) -> usize;
+}
+
+/// `dlsym` of the global scope through the layer (see `stafeto_dlsym`).
+///
+/// # Safety
+/// `name` is a NUL-terminated string; the other words come from the
+/// auxiliary vector.
+pub(crate) unsafe fn dlsym_global(
+    name: *const c_char,
+    phdr: usize,
+    phnum: usize,
+    base: usize,
+) -> usize {
+    unsafe { stafeto_dlsym(name, phdr, phnum, base) }
+}
+
 /// The most bytes one read of the layer gives (proto_fs::MAX_READ).
 const STAFETO_READ_MAX: usize = 1016;
 

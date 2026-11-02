@@ -70,14 +70,6 @@ mod fixed {
     pub const NO_MODE: &core::ffi::CStr = c"dlopen: the mode has neither RTLD_LAZY nor RTLD_NOW";
 }
 
-#[cfg(stafeto)]
-unsafe extern "C" {
-    /// The layer's search of the global scope: the address of the defined
-    /// symbol `name` in the program (headers `phdr`, `phnum`) and then in
-    /// libc.so (its ELF header at `base`, 0 for a static program), 0 for none.
-    fn stafeto_dlsym(name: *const c_char, phdr: usize, phnum: usize, base: usize) -> usize;
-}
-
 #[thread_local]
 static ERROR: AtomicUsize = AtomicUsize::new(0);
 
@@ -202,7 +194,9 @@ pub unsafe extern "C" fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *m
         // SAFETY: `symbol` is the caller's NUL-terminated name; the layer
         // reads the tables of the two modules the loader placed.
         let found =
-            unsafe { stafeto_dlsym(symbol, value(AT_PHDR), value(AT_PHNUM), value(AT_BASE)) };
+            unsafe {
+                crate::platform::sys::dlsym_global(symbol, value(AT_PHDR), value(AT_PHNUM), value(AT_BASE))
+            };
         if found == 0 {
             ERROR.store(fixed::NO_SYMBOL.as_ptr() as usize, Ordering::SeqCst);
         }
