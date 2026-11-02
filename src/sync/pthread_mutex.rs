@@ -301,7 +301,7 @@ impl RlctMutex {
                                 self.inner.as_ptr(),
                                 thread,
                                 monotonic.as_ref(),
-                                thread & INDEX_MASK,
+                                owner_thread(thread),
                             )
                         } {
                             Err(Errno(EDEADLK)) => return Err(Errno(EDEADLK)),
@@ -467,10 +467,38 @@ enum Ty {
 }
 
 // Children after fork can only call async-signal-safe functions until they exec.
+#[cfg(not(stafeto))]
 #[thread_local]
 static CACHED_OS_TID_INVALID_AFTER_FORK: Cell<u32> = Cell::new(0);
 
+/// The number of the thread that owns the mutex word `word`.
+#[cfg(stafeto)]
+fn owner_thread(word: u32) -> u32 {
+    word & INDEX_MASK & THREAD_BITS
+}
+
+#[cfg(not(stafeto))]
+fn owner_thread(word: u32) -> u32 {
+    word & INDEX_MASK
+}
+
+/// The owner of a mutex word on stafeto: the PID in the high bits, so that a
+/// mutex shared between processes tells their threads apart (the number of a
+/// thread is its place in its process, 64 places), and the number of the
+/// thread in the low eight. Worked out at each call: a child of fork has
+/// another PID.
+#[cfg(stafeto)]
+fn os_tid_invalid_after_fork() -> u32 {
+    let tid = Sys::gettid().cast_unsigned() & THREAD_BITS;
+    let pid = Sys::getpid().cast_unsigned();
+    ((pid << 8) | tid) & INDEX_MASK
+}
+
+#[cfg(stafeto)]
+const THREAD_BITS: u32 = 0xff;
+
 // Assumes TIDs are unique between processes, which I only know is true for Redox.
+#[cfg(not(stafeto))]
 fn os_tid_invalid_after_fork() -> u32 {
     // TODO: Coordinate better if using shared == PTHREAD_PROCESS_SHARED, with up to 2^32 separate
     // threads within possibly distinct processes, using the mutex. OS thread IDs on Redox are
