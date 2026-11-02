@@ -141,6 +141,95 @@ extern "C" fn init_array() {
     }
 }
 
+/// stafeto: the constructor arrays of a dynamically linked program, found
+/// through its `PT_DYNAMIC` (the loader names the program's headers with
+/// `AT_PHDR`). `(preinit, init)`, each a start and a count of functions.
+#[cfg(stafeto)]
+struct ProgramArrays {
+    preinit: (*const extern "C" fn(), usize),
+    init: (*const extern "C" fn(), usize),
+}
+
+/// None for a program that is linked statically (no `AT_STAFETO_TLS`), whose
+/// arrays the linker bounded with `__init_array_start` and its kin.
+#[cfg(stafeto)]
+unsafe fn program_arrays(sp: &Stack) -> Option<ProgramArrays> {
+    use crate::platform::auxv_defs::{AT_STAFETO_TLS, AT_NULL, AT_PHDR, AT_PHENT, AT_PHNUM};
+    const PT_PHDR: u32 = 6;
+    const PT_DYNAMIC: u32 = 2;
+    const DT_NULL: u64 = 0;
+    const DT_INIT_ARRAY: u64 = 25;
+    const DT_INIT_ARRAYSZ: u64 = 27;
+    const DT_PREINIT_ARRAY: u64 = 32;
+    const DT_PREINIT_ARRAYSZ: u64 = 33;
+    // Elf64_Phdr: p_type u32 at 0, p_vaddr u64 at 16.
+    const PHDR64: usize = 56;
+    let (mut dynamic, mut phdr, mut phnum, mut phent) = (false, 0, 0, 0);
+    let mut auxv = sp.auxv();
+    loop {
+        let (kind, value) = unsafe { *auxv };
+        match kind {
+            AT_NULL => break,
+            AT_STAFETO_TLS => dynamic = true,
+            AT_PHDR => phdr = value,
+            AT_PHNUM => phnum = value,
+            AT_PHENT => phent = value,
+            _ => (),
+        }
+        auxv = unsafe { auxv.add(1) };
+    }
+    if !dynamic || phent != PHDR64 {
+        return None;
+    }
+    let mut bias = 0usize;
+    let mut dynamic_at = None;
+    for i in 0..phnum {
+        let header = (phdr + PHDR64 * i) as *const u8;
+        let kind = unsafe { header.cast::<u32>().read_unaligned() };
+        let vaddr = unsafe { header.add(16).cast::<u64>().read_unaligned() } as usize;
+        match kind {
+            // The shift of the program: zero for ET_EXEC, whose headers lie
+            // at their own addresses.
+            PT_PHDR => bias = phdr.wrapping_sub(vaddr),
+            PT_DYNAMIC => dynamic_at = Some(vaddr),
+            _ => (),
+        }
+    }
+    let mut entry = dynamic_at?.wrapping_add(bias) as *const u64;
+    let (mut preinit, mut preinit_size, mut init, mut init_size) = (0u64, 0u64, 0u64, 0u64);
+    loop {
+        let tag = unsafe { entry.read() };
+        let value = unsafe { entry.add(1).read() };
+        match tag {
+            DT_NULL => break,
+            DT_PREINIT_ARRAY => preinit = value,
+            DT_PREINIT_ARRAYSZ => preinit_size = value,
+            DT_INIT_ARRAY => init = value,
+            DT_INIT_ARRAYSZ => init_size = value,
+            _ => (),
+        }
+        entry = unsafe { entry.add(2) };
+    }
+    let word = core::mem::size_of::<usize>();
+    let array = |at: u64, size: u64| {
+        (
+            (at as usize).wrapping_add(bias) as *const extern "C" fn(),
+            if at == 0 { 0 } else { size as usize / word },
+        )
+    };
+    Some(ProgramArrays {
+        preinit: array(preinit, preinit_size),
+        init: array(init, init_size),
+    })
+}
+
+#[cfg(stafeto)]
+unsafe fn run_array((start, count): (*const extern "C" fn(), usize)) {
+    for i in 0..count {
+        (unsafe { *start.add(i) })();
+    }
+}
+
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn relibc_start_v1(
@@ -252,6 +341,16 @@ pub unsafe extern "C" fn relibc_start_v1(
         log::info!("Relibc commit hash: {commit_hash}");
     }
 
+    // A dynamically linked program: its arrays go in the order of the gABI,
+    // its preinit array, the C library's arrays (the loop below), its init
+    // array.
+    #[cfg(stafeto)]
+    let program = unsafe { program_arrays(sp) };
+    #[cfg(stafeto)]
+    if let Some(program) = &program {
+        unsafe { run_array(program.preinit) };
+    }
+
     // Run preinit array
     {
         let mut f = core::ptr::from_ref(unsafe { &__preinit_array_start });
@@ -268,6 +367,11 @@ pub unsafe extern "C" fn relibc_start_v1(
             (unsafe { *f })();
             f = unsafe { f.add(1) };
         }
+    }
+
+    #[cfg(stafeto)]
+    if let Some(program) = &program {
+        unsafe { run_array(program.init) };
     }
 
     // not argv or envp, because programs like bash try to modify this *const* pointer :|

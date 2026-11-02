@@ -47,6 +47,8 @@ fn static_init(
     let mut phdr_opt = None;
     let mut phent_opt = None;
     let mut phnum_opt = None;
+    #[cfg(stafeto)]
+    let mut tls_opt = None;
 
     let mut auxv = sp.auxv();
     loop {
@@ -59,14 +61,30 @@ fn static_init(
             AT_PHDR => phdr_opt = Some(value),
             AT_PHENT => phent_opt = Some(value),
             AT_PHNUM => phnum_opt = Some(value),
+            #[cfg(stafeto)]
+            crate::platform::auxv_defs::AT_STAFETO_TLS => tls_opt = Some(value),
             _ => (),
         }
 
         auxv = unsafe { auxv.add(1) };
     }
 
+    // A dynamically linked stafeto program has no PT_TLS: the loader names
+    // the one header of the shared C library, which alone is searched.
+    #[cfg(stafeto)]
+    let (phdr, phent, phnum) = match tls_opt {
+        Some(header) => (header, SIZEOF_PHDR64, 1),
+        None => (
+            phdr_opt.expect("failed to find AT_PHDR"),
+            phent_opt.expect("failed to find AT_PHENT"),
+            phnum_opt.expect("failed to find AT_PHNUM"),
+        ),
+    };
+    #[cfg(not(stafeto))]
     let phdr = phdr_opt.expect("failed to find AT_PHDR");
+    #[cfg(not(stafeto))]
     let phent = phent_opt.expect("failed to find AT_PHENT");
+    #[cfg(not(stafeto))]
     let phnum = phnum_opt.expect("failed to find AT_PHNUM");
 
     for i in 0..phnum {

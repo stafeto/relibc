@@ -26,6 +26,12 @@ pub const AT_RANDOM: usize = 25; /* Address of 16 random bytes.  */
 pub const AT_HWCAP2: usize = 26; /* More machine-dependent hints about*/
 pub const AT_EXECFN: usize = 31; /* Filename of executable.  */
 
+/// stafeto: the address of the `PT_TLS` program header of the shared C
+/// library, which a dynamically linked program takes its TLS image from
+/// (the program has no `PT_TLS` of its own). Outside the numbers Linux uses.
+#[cfg(stafeto)]
+pub const AT_STAFETO_TLS: usize = 0x7374_0001;
+
 // TODO: Downgrade aux vectors to getauxval constants on Redox, and use a regular struct for
 // passing important runtime info between exec (or posix_spawn in the future) calls.
 
