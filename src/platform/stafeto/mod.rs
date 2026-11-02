@@ -405,7 +405,7 @@ pub(crate) fn timer_fire(timer: usize, count: u64) {
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 22;
+const PLATFORM_INTERFACE: u64 = 23;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
