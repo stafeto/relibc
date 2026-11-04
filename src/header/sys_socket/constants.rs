@@ -25,6 +25,9 @@ pub const SOCK_NONBLOCK: c_int = 0o4_000;
 /// Create a socket file descriptor wit the `FD_CLOEXEC` flag atomically set
 /// on that file descriptor.
 pub const SOCK_CLOEXEC: c_int = 0o2_000_000;
+/// Create a socket file descriptor with the `FD_CLOFORK` flag atomically set
+/// on that file descriptor (POSIX.1-2024).
+pub const SOCK_CLOFORK: c_int = 0o1_0000_0000;
 
 // End of socket creation flags
 
