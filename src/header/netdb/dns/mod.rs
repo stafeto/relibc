@@ -59,7 +59,6 @@ impl Dns {
     }
 
     pub fn parse(data: &[u8]) -> Result<Self, String> {
-        let name_ind = 0b1100_0000u8;
         let mut i = 0;
 
         macro_rules! pop_u8 {
@@ -99,31 +98,8 @@ impl Dns {
 
         macro_rules! pop_name {
             () => {{
-                let mut name = String::new();
-                let old_i = i;
-
-                loop {
-                    let name_len = pop_u8!();
-                    if name_len & name_ind == name_ind {
-                        i -= 1;
-                        i = (pop_n16!() - ((u16::from(name_ind)) << 8)) as usize;
-                        continue;
-                    }
-                    if name_len == 0 {
-                        break;
-                    }
-                    if !name.is_empty() {
-                        name.push('.');
-                    }
-                    for _name_i in 0..name_len {
-                        name.push(pop_u8!() as char);
-                    }
-                }
-
-                if i <= old_i {
-                    i = old_i + 2;
-                }
-
+                let (name, next) = read_name(data, i)?;
+                i = next;
                 name
             }};
         }
@@ -162,5 +138,88 @@ impl Dns {
             queries,
             answers,
         })
+    }
+}
+
+/// Longest jump chain followed in a name.
+const MAX_JUMPS: usize = 16;
+/// Longest name (RFC 1035, 2.3.4).
+const MAX_NAME: usize = 255;
+
+/// Reads the name at `start`: labels, ending in a zero byte or in a
+/// compression pointer (RFC 1035, 4.1.4). Returns the name and the position
+/// after it. A pointer goes back only, to a place before the byte of the
+/// pointer itself, and at most `MAX_JUMPS` pointers are followed, so that a
+/// reply cannot make the parse loop.
+fn read_name(data: &[u8], start: usize) -> Result<(String, usize), String> {
+    let mut name = String::new();
+    let mut pos = start;
+    let mut resume = None;
+    let mut jumps = 0;
+    loop {
+        let len = *data.get(pos).ok_or_else(|| String::from("name: end of data"))?;
+        match len & 0b1100_0000 {
+            0b1100_0000 => {
+                let low = *data
+                    .get(pos + 1)
+                    .ok_or_else(|| String::from("name: short pointer"))?;
+                let target = (usize::from(len & 0b0011_1111) << 8) | usize::from(low);
+                if resume.is_none() {
+                    resume = Some(pos + 2);
+                }
+                jumps += 1;
+                if jumps > MAX_JUMPS || target >= pos {
+                    return Err(String::from("name: bad pointer"));
+                }
+                pos = target;
+            }
+            0 => {
+                let len = usize::from(len);
+                if len == 0 {
+                    return Ok((name, resume.unwrap_or(pos + 1)));
+                }
+                let label = data
+                    .get(pos + 1..pos + 1 + len)
+                    .ok_or_else(|| String::from("name: short label"))?;
+                if !name.is_empty() {
+                    name.push('.');
+                }
+                if name.len() + len > MAX_NAME {
+                    return Err(String::from("name: too long"));
+                }
+                name.extend(label.iter().map(|&byte| byte as char));
+                pos += 1 + len;
+            }
+            _ => return Err(String::from("name: reserved label type")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Dns, read_name};
+
+    #[test]
+    fn a_pointer_to_itself_ends_with_an_error() {
+        let mut data = [0u8; 14];
+        data[12] = 0xC0;
+        data[13] = 12;
+        assert!(read_name(&data, 12).is_err());
+    }
+
+    #[test]
+    fn labels_then_a_pointer_make_one_name() {
+        let mut data = vec![0u8; 12];
+        data.extend_from_slice(&[4, b't', b'e', b's', b't', 0]);
+        let at = data.len();
+        data.extend_from_slice(&[1, b'a', 0xC0, 12]);
+        assert_eq!(read_name(&data, at), Ok(("a.test".into(), at + 4)));
+    }
+
+    #[test]
+    fn a_reply_with_a_looping_answer_does_not_parse() {
+        let mut data = vec![0, 1, 0x81, 0x80, 0, 0, 0, 1, 0, 0, 0, 0];
+        data.extend_from_slice(&[0xC0, 12, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]);
+        assert!(Dns::parse(&data).is_err());
     }
 }
