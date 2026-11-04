@@ -47,6 +47,10 @@ pub const POLLRDBAND: c_short = 0x080;
 pub const POLLWRNORM: c_short = 0x100;
 /// Priority data may be written.
 pub const POLLWRBAND: c_short = 0x200;
+/// Non-POSIX, see <https://www.man7.org/linux/man-pages/man2/poll.2.html>.
+///
+/// The peer of a stream shut its writing half (the value of Linux).
+pub const POLLRDHUP: c_short = 0x2000;
 
 /// An unsigned integer type used for the number of file descriptors.
 #[allow(non_camel_case_types)]
