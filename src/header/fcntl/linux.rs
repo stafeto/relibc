@@ -8,6 +8,13 @@ pub const FD_CLOEXEC: c_int = 0x8_0000;
 /// flag of a descriptor uses.
 pub const FD_CLOFORK: c_int = 0x100_0000;
 
+/// Set the process or process group that receives `SIGIO` and `SIGURG` for
+/// a socket (the value of Linux).
+pub const F_SETOWN: c_int = 8;
+/// Get the process or process group that receives `SIGIO` and `SIGURG` for
+/// a socket (the value of Linux).
+pub const F_GETOWN: c_int = 9;
+
 // Flags for capability based "at" functions {
 /// Use the current working directory to determine the target of relative file
 /// paths.

@@ -37,6 +37,9 @@ use generic_rt::GenericTcb;
 
 unsafe extern "C" {
     fn stafeto_write(fd: c_int, buf: *const u8, len: usize) -> isize;
+    /// The layer's writev of a stream socket as one send; `isize::MIN`
+    /// when `fd` is no such socket.
+    fn stafeto_writev_socket(fd: c_int, iov: *const iovec, iovcnt: c_int) -> isize;
     fn stafeto_read(fd: c_int, buf: *mut u8, len: usize) -> isize;
     fn stafeto_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn stafeto_close(fd: c_int) -> c_int;
@@ -1550,6 +1553,11 @@ impl Pal for Sys {
         }
         let all = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
         let parts = valid_parts(all)?;
+        // A stream socket takes all the parts as one send.
+        let sent = unsafe { stafeto_writev_socket(fildes, parts.as_ptr(), parts.len() as c_int) };
+        if sent != isize::MIN {
+            return ret(sent).map(|n| n as usize);
+        }
         let total = parts
             .iter()
             .fold(0usize, |sum, p| sum.saturating_add(p.iov_len));

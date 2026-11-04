@@ -14,6 +14,10 @@ pub const TCP_NODELAY: c_int = 1;
 pub const TCP_MAXSEG: c_int = 2;
 /// Non-POSIX, see <https://www.man7.org/linux/man-pages/man7/tcp.7.html>.
 ///
+/// Hold partial frames back until the option is cleared.
+pub const TCP_CORK: c_int = 3;
+/// Non-POSIX, see <https://www.man7.org/linux/man-pages/man7/tcp.7.html>.
+///
 /// The time (in seconds) the connection needs to remain idle before TCP starts
 /// sending keepalive probes, if the socket option `SO_KEEPALIVE` has been set
 /// on this socket.

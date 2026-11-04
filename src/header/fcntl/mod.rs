@@ -120,7 +120,7 @@ pub unsafe extern "C" fn fcntl(fildes: c_int, cmd: c_int, mut __valist: ...) -> 
     // c_ulonglong
     let arg = match cmd {
         F_DUPFD | F_SETFD | F_SETFL | F_GETLK | F_SETLK | F_SETLKW | F_OFD_GETLK | F_OFD_SETLK
-        | F_OFD_SETLKW | F_DUPFD_CLOEXEC | F_DUPFD_CLOFORK => unsafe {
+        | F_OFD_SETLKW | F_DUPFD_CLOEXEC | F_DUPFD_CLOFORK | F_SETOWN => unsafe {
             __valist.next_arg::<c_ulonglong>()
         },
         _ => 0,
