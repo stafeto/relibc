@@ -182,7 +182,7 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         _SC_SEM_NSEMS_MAX => 256,
         _SC_SEM_VALUE_MAX => 32767,
         // A lowered process limit constrains allocation; infinity does not
-        // enlarge the layer's physical descriptor table.
+        // enlarge the layer's physical descriptor table of 1 024 numbers.
         _SC_OPEN_MAX => {
             let mut limit = core::mem::MaybeUninit::<crate::header::sys_resource::rlimit>::uninit();
             if unsafe {
@@ -194,7 +194,7 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
             {
                 return Some(-1);
             }
-            unsafe { limit.assume_init() }.rlim_cur.min(64) as c_long
+            unsafe { limit.assume_init() }.rlim_cur.min(1024) as c_long
         }
         // The links of a path the file service follows.
         _SC_SYMLOOP_MAX => SYMLOOP_MAX,
