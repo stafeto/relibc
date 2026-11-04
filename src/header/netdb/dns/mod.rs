@@ -157,7 +157,9 @@ fn read_name(data: &[u8], start: usize) -> Result<(String, usize), String> {
     let mut resume = None;
     let mut jumps = 0;
     loop {
-        let len = *data.get(pos).ok_or_else(|| String::from("name: end of data"))?;
+        let len = *data
+            .get(pos)
+            .ok_or_else(|| String::from("name: end of data"))?;
         match len & 0b1100_0000 {
             0b1100_0000 => {
                 let low = *data

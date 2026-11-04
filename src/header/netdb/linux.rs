@@ -52,10 +52,7 @@ mod tests {
     #[test]
     fn the_first_three_nameserver_lines_count() {
         let text = "# c\n; c\nsearch x\n  nameserver\t10.0.0.1  \nnameserver\nnameserver ::1\nnameserver 10.0.0.2\nnameserver 10.0.0.3\nnameserver 10.0.0.4\n";
-        assert_eq!(
-            parse_nameservers(text),
-            ["10.0.0.1", "::1", "10.0.0.2"]
-        );
+        assert_eq!(parse_nameservers(text), ["10.0.0.1", "::1", "10.0.0.2"]);
     }
 
     #[test]

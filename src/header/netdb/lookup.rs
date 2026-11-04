@@ -9,7 +9,7 @@ use crate::{
 
 use crate::header::{
     bits_arpainet::htons,
-    errno::{EAGAIN, EBADMSG, EIO, EINTR, ETIMEDOUT},
+    errno::{EAGAIN, EBADMSG, EINTR, EIO, ETIMEDOUT},
     netinet_in::{IPPROTO_UDP, in_addr, sockaddr_in},
     poll::{POLLIN, pollfd},
     sys_socket::constants::{AF_INET, SOCK_CLOEXEC, SOCK_DGRAM},
@@ -187,9 +187,12 @@ fn query(name: &str, q_type: u16) -> Result<Vec<DnsAnswer>, Errno> {
                     break;
                 }
                 let mut from = [0u8; size_of::<sockaddr_in>()];
-                let Ok((count, _)) =
-                    Sys::recvfrom(sock.0, Out::from_mut(buffer.as_mut_slice()), 0, Some(&mut from))
-                else {
+                let Ok((count, _)) = Sys::recvfrom(
+                    sock.0,
+                    Out::from_mut(buffer.as_mut_slice()),
+                    0,
+                    Some(&mut from),
+                ) else {
                     failed = true;
                     break;
                 };
