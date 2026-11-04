@@ -141,6 +141,12 @@ impl Dns {
     }
 }
 
+/// Whether `name` can go into a question: every label of 1 to 63 bytes and
+/// the whole name, without a final dot, of at most 253 bytes (RFC 1035, 2.3.4).
+pub fn valid_name(name: &str) -> bool {
+    name.len() <= 253 && name.split('.').all(|label| (1..=63).contains(&label.len()))
+}
+
 /// Longest jump chain followed in a name.
 const MAX_JUMPS: usize = 16;
 /// Longest name (RFC 1035, 2.3.4).
@@ -199,7 +205,22 @@ fn read_name(data: &[u8], start: usize) -> Result<(String, usize), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Dns, read_name};
+    use super::{Dns, read_name, valid_name};
+
+    #[test]
+    fn a_name_needs_labels_of_one_to_sixty_three_bytes_and_253_in_all() {
+        assert!(valid_name("a.test"));
+        assert!(valid_name(&"a".repeat(63)));
+        assert!(!valid_name(&"a".repeat(64)));
+        assert!(!valid_name(&format!("{}.com", "a".repeat(300))));
+        assert!(!valid_name("a..b"));
+        assert!(!valid_name(""));
+        assert!(!valid_name(".a"));
+        let long = format!("{0}.{0}.{0}.{1}", "a".repeat(63), "a".repeat(61));
+        assert_eq!(long.len(), 253);
+        assert!(valid_name(&long));
+        assert!(!valid_name(&format!("{0}.{0}.{0}.{1}", "a".repeat(63), "a".repeat(62))));
+    }
 
     #[test]
     fn a_pointer_to_itself_ends_with_an_error() {

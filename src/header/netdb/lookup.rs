@@ -17,7 +17,7 @@ use crate::header::{
 };
 
 use super::{
-    dns::{Dns, DnsAnswer, DnsQuery},
+    dns::{Dns, DnsAnswer, DnsQuery, valid_name},
     sys::get_dns_servers,
 };
 
@@ -127,6 +127,11 @@ fn judge(
 /// refused, `EBADMSG` for a reply that does not parse.
 fn query(name: &str, q_type: u16) -> Result<Vec<DnsAnswer>, Errno> {
     let name = name.trim_end_matches('.');
+    // A label past 63 bytes would read as a pointer to the server, and the
+    // builder of the packet cannot hold one past 255.
+    if !valid_name(name) {
+        return Err(Errno(EINVAL));
+    }
     let servers: Vec<u32> = get_dns_servers()?
         .iter()
         .filter_map(|text| Ipv4Addr::from_str(text.trim()).ok())

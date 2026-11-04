@@ -176,11 +176,13 @@ enum AddrInfoErr {
 }
 /// The `getaddrinfo` code for a failed name lookup: `EAI_AGAIN` when a retry
 /// may succeed (no answer, a failing server), `EAI_FAIL` for a reply that
-/// does not parse, `EAI_SYSTEM` with `errno` otherwise.
+/// does not parse, `EAI_NONAME` for a name that cannot be asked, `EAI_SYSTEM`
+/// with `errno` otherwise.
 fn lookup_error(error: Errno) -> AddrInfoErr {
     match error.0 {
         crate::header::errno::ETIMEDOUT | crate::header::errno::EAGAIN => AddrInfoErr::EAI_AGAIN,
         crate::header::errno::EBADMSG => AddrInfoErr::EAI_FAIL,
+        crate::header::errno::EINVAL => AddrInfoErr::EAI_NONAME,
         _ => AddrInfoErr::from(error),
     }
 }
