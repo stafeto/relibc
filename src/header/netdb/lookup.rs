@@ -9,7 +9,7 @@ use crate::{
 
 use crate::header::{
     bits_arpainet::htons,
-    errno::{EAGAIN, EBADMSG, EINTR, EIO, ETIMEDOUT},
+    errno::{EAGAIN, EBADMSG, EINTR, EINVAL, EIO, ETIMEDOUT},
     netinet_in::{IPPROTO_UDP, in_addr, sockaddr_in},
     poll::{POLLIN, pollfd},
     sys_socket::constants::{AF_INET, SOCK_CLOEXEC, SOCK_DGRAM},
