@@ -174,6 +174,19 @@ enum AddrInfoErr {
     EAI_SYSTEM = -11,
     EAI_OVERFLOW = -12,
 }
+/// The `getaddrinfo` code for a failed name lookup: `EAI_AGAIN` when a retry
+/// may succeed (no answer, a failing server), `EAI_FAIL` for a reply that
+/// does not parse, `EAI_NONAME` for a name that cannot be asked, `EAI_SYSTEM`
+/// with `errno` otherwise.
+fn lookup_error(error: Errno) -> AddrInfoErr {
+    match error.0 {
+        crate::header::errno::ETIMEDOUT | crate::header::errno::EAGAIN => AddrInfoErr::EAI_AGAIN,
+        crate::header::errno::EBADMSG => AddrInfoErr::EAI_FAIL,
+        crate::header::errno::EINVAL => AddrInfoErr::EAI_NONAME,
+        _ => AddrInfoErr::from(error),
+    }
+}
+
 impl From<Errno> for AddrInfoErr {
     fn from(value: Errno) -> Self {
         value.sync();
@@ -1138,7 +1151,7 @@ fn getaddrinfo_inner(
 
         vec![in_addr { s_addr }]
     } else {
-        lookup_host(node)?
+        lookup_host(node).map_err(lookup_error)?
     };
 
     let mut first_info: Option<Box<addrinfo>> = None;
@@ -1190,7 +1203,7 @@ fn getaddrinfo_inner(
         }
     }
 
-    first_info.ok_or(AddrInfoErr::EAI_FAIL)
+    first_info.ok_or(AddrInfoErr::EAI_NONAME)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/freeaddrinfo.html>.
