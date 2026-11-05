@@ -259,6 +259,7 @@ unsafe extern "C" {
     pub(crate) fn stafeto_truncate(path: *const c_char, length: off_t) -> c_int;
     fn stafeto_setrlimit(resource: c_int, input: *const rlimit) -> c_int;
     fn stafeto_getgroups(size: c_int, out: *mut gid_t) -> c_int;
+    fn stafeto_setgroups(size: size_t, list: *const gid_t) -> c_int;
     fn stafeto_fexecve(fd: c_int, argv: *const *const c_char, envp: *const *const c_char) -> c_int;
     fn stafeto_pread(fd: c_int, buf: *mut u8, len: usize, off: off_t) -> isize;
     fn stafeto_pwrite(fd: c_int, buf: *const u8, len: usize, off: off_t) -> isize;
@@ -1419,7 +1420,9 @@ impl Pal for Sys {
     }
 
     unsafe fn setgroups(size: size_t, list: *const gid_t) -> Result<()> {
-        Err(Errno(ENOSYS))
+        // The process service keeps the list (EPERM for a caller that is
+        // not privileged, EINVAL above NGROUPS_MAX).
+        ret(unsafe { stafeto_setgroups(size, list) } as isize).map(|_| ())
     }
 
     fn setpgid(pid: pid_t, pgid: pid_t) -> Result<()> {
