@@ -87,6 +87,9 @@ pub fn crypt_sha(passw: &[u8], setting: &str, cipher: ShaType) -> Option<String>
         {
             let c_end = setting[cursor..].iter().position(|&r| r == b'$')?;
             let digits = core::str::from_utf8(&setting[cursor..cursor + c_end]).ok()?;
+            if !digits.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+                return None;
+            }
             if let Ok(u) = digits.parse::<c_ulong>() {
                 if u > ROUNDS_LIMIT {
                     return None;
