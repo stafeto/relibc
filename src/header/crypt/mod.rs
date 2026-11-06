@@ -83,6 +83,13 @@ pub unsafe extern "C" fn crypt_r(
         return ptr::null_mut();
     };
 
+    // Every format that starts with '$' is made of ASCII; the parsers of the
+    // formats cut the setting at byte offsets, so a wider byte is refused here.
+    if setting.starts_with('$') && !setting.is_ascii() {
+        platform::ERRNO.set(EINVAL);
+        return ptr::null_mut();
+    }
+
     let encoded = if setting.starts_with('$') {
         if setting.starts_with("$1$") {
             crypt_md5(key, setting)
@@ -130,6 +137,7 @@ pub unsafe extern "C" fn crypt_r(
             dst
         }
     } else {
+        platform::ERRNO.set(EINVAL);
         ptr::null_mut()
     }
 }

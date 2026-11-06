@@ -1,7 +1,7 @@
 use alloc::string::{String, ToString};
 
 use sha_crypt::{
-    ROUNDS_DEFAULT, ROUNDS_MAX, ROUNDS_MIN, Sha256Params, Sha512Params, sha256_crypt_b64,
+    ROUNDS_DEFAULT, ROUNDS_MIN, Sha256Params, Sha512Params, sha256_crypt_b64,
     sha512_crypt_b64,
 };
 
@@ -9,8 +9,9 @@ use crate::platform::types::c_ulong;
 
 // key limit is not part of the original design, added for DoS protection.
 // rounds limit has been lowered (versus the reference/spec), also for DoS
-// protection. runtime is O(klen^2 + klen*rounds)
+// protection: above 9,999,999 as in musl the setting is refused. runtime is O(klen^2 + klen*rounds)
 const KEY_MAX: usize = 256;
+const ROUNDS_LIMIT: c_ulong = 9_999_999;
 const SALT_MAX: usize = 16;
 const RSTRING: &str = "rounds=";
 
@@ -72,20 +73,29 @@ pub fn crypt_sha(passw: &[u8], setting: &str, cipher: ShaType) -> Option<String>
         ShaType::Sha512 => "$6$",
     };
 
-    if &setting[0..3] != param {
+    let setting = setting.as_bytes();
+
+    if setting.get(0..3) != Some(param.as_bytes()) {
         return None;
     }
 
     let has_round;
     // 7 is len("rounds=")
-    if setting.get(cursor..cursor + 7) == Some(RSTRING) {
+    if setting.get(cursor..cursor + 7) == Some(RSTRING.as_bytes()) {
         cursor += 7;
         has_round = true;
         {
-            let c_end = setting[cursor..].chars().position(|r| r == '$')?;
-            if let Ok(u) = setting[cursor..cursor + c_end].parse::<c_ulong>() {
+            let c_end = setting[cursor..].iter().position(|&r| r == b'$')?;
+            let digits = core::str::from_utf8(&setting[cursor..cursor + c_end]).ok()?;
+            if !digits.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+                return None;
+            }
+            if let Ok(u) = digits.parse::<c_ulong>() {
+                if u > ROUNDS_LIMIT {
+                    return None;
+                }
                 cursor += c_end + 1;
-                rounds = u.min(ROUNDS_MAX as c_ulong).max(ROUNDS_MIN as c_ulong);
+                rounds = u.max(ROUNDS_MIN as c_ulong);
             } else {
                 return None;
             }
@@ -100,12 +110,13 @@ pub fn crypt_sha(passw: &[u8], setting: &str, cipher: ShaType) -> Option<String>
     for i in 0..SALT_MAX.min(setting.len() - cursor) {
         let idx = cursor + i;
 
-        if &setting[idx..=idx] == "$" {
+        if setting[idx] == b'$' {
             break;
         }
 
-        // reject characters that interfere with /etc/shadow parsing
-        if &setting[idx..=idx] == "\n" || &setting[idx..=idx] == ":" {
+        // reject characters that interfere with /etc/shadow parsing, and
+        // bytes outside ASCII
+        if setting[idx] == b'\n' || setting[idx] == b':' || !setting[idx].is_ascii() {
             return None;
         }
         slen += 1;
@@ -117,12 +128,12 @@ pub fn crypt_sha(passw: &[u8], setting: &str, cipher: ShaType) -> Option<String>
         ShaType::Sha256 => {
             let params = Sha256Params::new(usize::try_from(rounds).expect("rounds below u32::MAX"))
                 .unwrap_or(Sha256Params::new(ROUNDS_DEFAULT).unwrap());
-            sha256_crypt_b64(passw, setting.as_bytes(), &params)
+            sha256_crypt_b64(passw, setting, &params)
         }
         ShaType::Sha512 => {
             let params = Sha512Params::new(usize::try_from(rounds).expect("rounds below u32::MAX"))
                 .unwrap_or(Sha512Params::new(ROUNDS_DEFAULT).unwrap());
-            sha512_crypt_b64(passw, setting.as_bytes(), &params)
+            sha512_crypt_b64(passw, setting, &params)
         }
     } {
         let (r_slice, rn_slice) = if has_round {
@@ -131,9 +142,11 @@ pub fn crypt_sha(passw: &[u8], setting: &str, cipher: ShaType) -> Option<String>
             ("", String::new())
         };
 
+        // The salt is ASCII: the loop above refuses every other byte.
+        let salt = core::str::from_utf8(setting).ok()?;
         Some(format!(
             "{}{}{}{}${}",
-            param, r_slice, rn_slice, setting, enc
+            param, r_slice, rn_slice, salt, enc
         ))
     } else {
         None

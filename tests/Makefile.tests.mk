@@ -48,6 +48,7 @@ EXPECT_NAMES=\
 	assert \
 	ctype \
 	crypt/blowfish \
+	crypt/errors \
 	crypt/md5 \
 	crypt/pbkdf2 \
 	crypt/scrypt \
