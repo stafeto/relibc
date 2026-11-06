@@ -57,6 +57,7 @@ EXPECT_NAMES=\
 	dirent/fdopendir \
 	dirent/scandir \
 	endian \
+	names/prefix \
 	err \
 	errno \
 	error \

@@ -131,6 +131,11 @@ fn to_ulong(s: &str) -> c_ulong {
     c_ulong::from_str(s).unwrap_or(0)
 }
 
+/// True when the first field of `line` equals `name` exactly.
+fn has_name(line: &str, name: &str) -> bool {
+    line.split(SEPARATOR).next() == Some(name)
+}
+
 fn parse_spwd(line: &str, destbuf: Option<DestBuffer>) -> Result<OwnedSpwd, Error> {
     let mut parts = line.split(SEPARATOR);
 
@@ -194,11 +199,13 @@ pub unsafe extern "C" fn getspnam(name: *const c_char) -> *mut spwd {
     let Ok(db) = File::open(SHADOW_FILE.into(), fcntl::O_RDONLY) else {
         return ptr::null_mut();
     };
-    let c_name = unsafe { CStr::from_ptr(name) };
+    let Ok(c_name) = unsafe { CStr::from_ptr(name) }.to_str() else {
+        return ptr::null_mut();
+    };
 
     for line in BufReader::new(db).lines() {
         let Ok(line) = line else { continue };
-        if line.starts_with(c_name.to_str().unwrap_or("\0"))
+        if has_name(&line, c_name)
             && let Ok(pwd) = parse_spwd(&line, None)
         {
             return pwd.into_global();
@@ -221,11 +228,13 @@ pub unsafe extern "C" fn getspnam_r(
     let Ok(db) = File::open(SHADOW_FILE.into(), fcntl::O_RDONLY) else {
         return ENOENT;
     };
-    let c_name = unsafe { CStr::from_ptr(name).to_str().unwrap_or("\0") };
+    let Ok(c_name) = unsafe { CStr::from_ptr(name) }.to_str() else {
+        return ENOENT;
+    };
 
     for line in BufReader::new(db).lines() {
         let Ok(line) = line else { continue };
-        if line.starts_with(c_name) {
+        if has_name(&line, c_name) {
             let dest_buf = Some(DestBuffer {
                 ptr: buffer.cast::<u8>(),
                 len: buflen,
