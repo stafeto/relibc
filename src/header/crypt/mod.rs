@@ -130,6 +130,7 @@ pub unsafe extern "C" fn crypt_r(
             dst
         }
     } else {
+        platform::ERRNO.set(EINVAL);
         ptr::null_mut()
     }
 }
