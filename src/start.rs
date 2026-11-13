@@ -293,7 +293,6 @@ unsafe fn stack_guard_from_auxv(sp: &Stack) -> (usize, u64) {
 
 /// Polls of the first seed, 50 ms apart, before the start says it waits.
 const WAIT_POLLS: u32 = 40;
-const GRND_NONBLOCK: crate::platform::types::c_uint = crate::header::sys_random::GRND_NONBLOCK;
 
 /// A process with no AT_RANDOM and no generator ends: the line says why.
 fn no_entropy_abort() -> ! {
@@ -319,7 +318,7 @@ unsafe fn init_stack_guard(mut value: usize) {
     // what the process waits for and the blocking call goes on.
     let mut polls = 0;
     while value == 0 {
-        let flags = if polls < WAIT_POLLS { GRND_NONBLOCK } else { 0 };
+        let flags = if polls < WAIT_POLLS { crate::header::sys_random::GRND_NONBLOCK } else { 0 };
         match crate::header::sys_random::fill_with(&mut bytes, |rest| Sys::getrandom(rest, flags)) {
             Ok(()) => {
                 value = usize::from_ne_bytes(bytes) & !0xff;
