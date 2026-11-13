@@ -85,7 +85,6 @@ posix-regex = { version = "0.1.4", features = ["no_std"] }
 
 rand = { version = "0.10", default-features = false }
 rand_xorshift = "0.5"
-rand_jitter = "0.6"
 
 memchr = { version = "2.2.0", default-features = false }
 plain.workspace = true

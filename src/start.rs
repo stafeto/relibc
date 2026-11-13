@@ -250,6 +250,52 @@ unsafe fn run_array((start, count): (*const extern "C" fn(), usize)) {
     }
 }
 
+/// Sets `__stack_chk_guard` from the 16 bytes AT_RANDOM points to; without
+/// them (or with all zero bytes) from a blocking `getrandom`. A process that
+/// has neither ends with `abort`: the canary never takes a value that is the
+/// same in every process. The low byte of the canary is zero, so that a string
+/// copy stops at it.
+///
+/// The functions this start calls before it returns are Rust, which has no
+/// stack protector, and `relibc_start_v1` does not return, so the canary
+/// changes under no frame that checks it.
+#[inline(never)]
+unsafe fn init_stack_guard(sp: &Stack) {
+    use crate::platform::auxv_defs::AT_RANDOM;
+    const WORD: usize = core::mem::size_of::<usize>();
+
+    let mut bytes = [0u8; WORD];
+    let at = unsafe { crate::platform::get_auxv_raw(sp.auxv().cast(), AT_RANDOM) };
+    if let Some(at) = at.filter(|at| *at != 0) {
+        // SAFETY: the loader names 16 readable bytes.
+        bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(at as *const u8, WORD) });
+    }
+    // The first byte in memory is the low byte on the little-endian targets;
+    // clear the low byte of the value on any of them.
+    let mut value = usize::from_ne_bytes(bytes) & !0xff;
+    let mut draws = 0;
+    while value == 0 {
+        // A wait for the first seed that a signal handler ended goes on.
+        match Sys::getrandom(&mut bytes, 0) {
+            Ok(WORD) => {
+                value = usize::from_ne_bytes(bytes) & !0xff;
+                draws += 1;
+                // A generator that gives only zero is no generator.
+                if value == 0 && draws == 8 {
+                    unsafe { stdlib::abort() };
+                }
+            }
+            Err(crate::error::Errno(crate::header::errno::EINTR)) => {}
+            _ => unsafe { stdlib::abort() },
+        }
+    }
+    unsafe { stdlib::set_stack_guard(value) };
+    // The bytes of the stack do not outlive the call.
+    for b in bytes.iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+}
+
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn relibc_start_v1(
@@ -269,6 +315,9 @@ pub unsafe extern "C" fn relibc_start_v1(
 
     // Ensure correct host system before executing more system calls
     unsafe { relibc_verify_host() };
+
+    // The canary of the stack protector, before anything that uses it runs.
+    unsafe { init_stack_guard(sp) };
 
     #[cfg(target_os = "redox")]
     let thr_fd = redox_rt::proc::FdGuard::new(
