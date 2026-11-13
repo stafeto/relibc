@@ -57,7 +57,7 @@ impl crypt_data {
 }
 
 /// Set by `gen_salt` when the process has no generator, so that `crypt_r`
-/// reports ENOSYS and not EINVAL for the setting.
+/// reports ENOSYS for the failure (the setting itself was fine).
 #[thread_local]
 static NO_ENTROPY: Cell<bool> = Cell::new(false);
 
