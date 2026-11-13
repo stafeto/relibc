@@ -327,9 +327,12 @@ pub unsafe extern "C" fn relibc_start_v1(
     unsafe { relibc_verify_host() };
 
     // The canary of the stack protector from AT_RANDOM, before anything that
-    // uses it runs; the fallback of `getrandom` goes in the next block, once
-    // the thread has its TCB.
+    // uses it runs; the fallback of `getrandom` goes after the platform's
+    // start, which attaches the thread to the system that answers it.
     let guard_from_aux = unsafe { stack_guard_from_auxv(sp) };
+    if guard_from_aux != 0 {
+        unsafe { stdlib::set_stack_guard(guard_from_aux) };
+    }
 
     #[cfg(target_os = "redox")]
     let thr_fd = redox_rt::proc::FdGuard::new(
@@ -373,10 +376,6 @@ pub unsafe extern "C" fn relibc_start_v1(
         redox_rt::TLS_ACTIVATED.store(true, core::sync::atomic::Ordering::Relaxed);
     }
 
-    // No AT_RANDOM: a blocking `getrandom` (it needs the thread's TCB). Only
-    // Rust has run so far, which has no stack protector.
-    unsafe { init_stack_guard(guard_from_aux) };
-
     let is_dynamically_linked = if let Some(tcb) = unsafe { ld_so::tcb::Tcb::current() } {
         #[cfg(target_os = "redox")]
         redox_rt::signal::setup_sighandler(&tcb.os_specific, true);
@@ -408,10 +407,15 @@ pub unsafe extern "C" fn relibc_start_v1(
     let auxvs = unsafe { get_auxvs(sp.auxv().cast()) };
     if !is_dynamically_linked {
         unsafe { crate::platform::init(auxvs) };
+        // No AT_RANDOM: a blocking `getrandom`. Before the constructors of
+        // the arrays; only Rust has run so far, which has no stack protector.
+        unsafe { init_stack_guard(guard_from_aux) };
         init_array();
         if unsafe { crate::platform::logger::init().is_err() } {
             log::error!("Logger has already been initialised");
         }
+    } else {
+        unsafe { init_stack_guard(guard_from_aux) };
     }
 
     // (It would technically have been equally valid to just allow the option to be set to "1".)
