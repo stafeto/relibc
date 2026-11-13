@@ -4,10 +4,9 @@
 
 use core::{convert::TryFrom, mem, ptr, slice};
 use rand::{
-    RngExt, SeedableRng,
-    distr::{Alphanumeric, Distribution, Uniform},
+    SeedableRng,
+    distr::{Distribution, Uniform},
 };
-use rand_jitter::JitterRng;
 use rand_xorshift::XorShiftRng;
 
 use crate::{
@@ -23,7 +22,6 @@ use crate::{
         stdlib::sort::{QsortContext, QsortRContext},
         string::{strlen, strncmp},
         sys_ioctl::{TIOCGPTN, TIOCSPTLCK, ioctl_ptr as ioctl},
-        time::constants::CLOCK_MONOTONIC,
         unistd::{self, _SC_PAGESIZE, sysconf},
         wchar::*,
     },
@@ -130,13 +128,22 @@ pub unsafe extern "C" fn abort() -> ! {
     core::intrinsics::abort();
 }
 
-#[cfg(not(target_pointer_width = "64"))]
+/// The canary of the stack protector. It has no value of its own: the start
+/// of the process sets it (`init_stack_guard` in `start.rs`) before any code
+/// that uses the protector runs, from AT_RANDOM or from `getrandom`, and a
+/// process that has neither ends. The low byte is zero, so a string copy
+/// stops at the canary.
 #[unsafe(no_mangle)]
-static __stack_chk_guard: uintptr_t = 0x19fcadfe;
+pub static mut __stack_chk_guard: uintptr_t = 0;
 
-#[cfg(target_pointer_width = "64")]
-#[unsafe(no_mangle)]
-static __stack_chk_guard: uintptr_t = 0xd048c37519fcadfe;
+/// Sets the canary of the stack protector, once, at the start of the process.
+///
+/// # Safety
+/// Called before any other thread runs and before the first function that
+/// uses the stack protector.
+pub(crate) unsafe fn set_stack_guard(value: uintptr_t) {
+    unsafe { (&raw mut __stack_chk_guard).write_volatile(value) };
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __stack_chk_fail() -> ! {
@@ -826,21 +833,14 @@ where
         }
     }
 
-    // The names come from the system's generator; a platform without one
-    // (getrandom gives an error) keeps the clock's jitter.
-    let mut jitter = None;
-
+    // The names come from the system's generator and from nothing else: a
+    // process without one fails with ENOSYS and leaves the template alone. A
+    // name from the clock would be one that another process can guess.
     for _ in 0..100 {
         let mut chars = [0u8; 6];
         if !random_alphanumerics(&mut chars) {
-            let rng = jitter.get_or_insert_with(|| {
-                let mut rng = JitterRng::new_with_timer(get_nstime);
-                let _ = rng.test_timer();
-                rng
-            });
-            for c in &mut chars {
-                *c = rng.sample(Alphanumeric);
-            }
+            platform::ERRNO.set(errno::ENOSYS);
+            return None;
         }
         unsafe {
             for (i, c) in chars.iter().enumerate() {
@@ -863,14 +863,17 @@ where
 
 /// Fills `out` with letters and digits drawn from `getrandom`, each of the
 /// 62 equally likely (bytes from 248 up are dropped, 248 being a multiple
-/// of 62); false when the platform has no generator.
+/// of 62); false when the platform has no generator. A wait for the first
+/// seed that a signal handler ended goes on.
 fn random_alphanumerics(out: &mut [u8]) -> bool {
     const SET: &[u8; 62] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut filled = 0;
     while filled < out.len() {
         let mut bytes = [0u8; 16];
-        if Sys::getrandom(&mut bytes, 0).is_err() {
-            return false;
+        match Sys::getrandom(&mut bytes, 0) {
+            Ok(16) => {}
+            Err(Errno(EINTR)) => continue,
+            _ => return false,
         }
         for b in bytes {
             if b < 248 && filled < out.len() {
@@ -927,14 +930,6 @@ pub extern "C" fn arc4random_uniform(upper_bound: u32) -> u32 {
         if r >= min {
             return r % upper_bound;
         }
-    }
-}
-
-fn get_nstime() -> u64 {
-    unsafe {
-        let mut ts = mem::MaybeUninit::uninit();
-        if Sys::clock_gettime(CLOCK_MONOTONIC, Out::from_uninit_mut(&mut ts)).is_ok() {}; // TODO what to do if Err?
-        ts.assume_init().tv_nsec as u64
     }
 }
 

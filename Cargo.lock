@@ -405,17 +405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
-name = "rand_jitter"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fdcd80e68f0a8f9ca5ec7cfd02fd5fbb8fbe6ef4e9b90ea2f48bb929b74f88e"
-dependencies = [
- "libc",
- "rand_core 0.10.1",
- "windows-sys",
-]
-
-[[package]]
 name = "rand_xorshift"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -518,7 +507,6 @@ dependencies = [
  "plain",
  "posix-regex",
  "rand",
- "rand_jitter",
  "rand_xorshift",
  "redox-buffer-pool",
  "redox-ioctl",
