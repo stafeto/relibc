@@ -250,38 +250,48 @@ unsafe fn run_array((start, count): (*const extern "C" fn(), usize)) {
     }
 }
 
-/// Sets `__stack_chk_guard` from the 16 bytes AT_RANDOM points to; without
-/// them (or with all zero bytes) from a blocking `getrandom`. A process that
-/// has neither ends with `abort`: the canary never takes a value that is the
-/// same in every process. The low byte of the canary is zero, so that a string
-/// copy stops at it.
-///
-/// The functions this start calls before it returns are Rust, which has no
-/// stack protector, and `relibc_start_v1` does not return, so the canary
-/// changes under no frame that checks it.
+/// The canary the 16 bytes AT_RANDOM points to give, with the low byte
+/// cleared so that a string copy stops at it; 0 when the vector has no
+/// AT_RANDOM or its bytes are all zero.
 #[inline(never)]
-unsafe fn init_stack_guard(sp: &Stack) {
+unsafe fn stack_guard_from_auxv(sp: &Stack) -> usize {
     use crate::platform::auxv_defs::AT_RANDOM;
     const WORD: usize = core::mem::size_of::<usize>();
 
-    let mut bytes = [0u8; WORD];
     let at = unsafe { crate::platform::get_auxv_raw(sp.auxv().cast(), AT_RANDOM) };
-    if let Some(at) = at.filter(|at| *at != 0) {
-        // SAFETY: the loader names 16 readable bytes.
-        bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(at as *const u8, WORD) });
+    match at.filter(|at| *at != 0) {
+        Some(at) => {
+            let mut bytes = [0u8; WORD];
+            // SAFETY: the loader names 16 readable bytes.
+            bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(at as *const u8, WORD) });
+            usize::from_ne_bytes(bytes) & !0xff
+        }
+        None => 0,
     }
-    // The first byte in memory is the low byte on the little-endian targets;
-    // clear the low byte of the value on any of them.
-    let mut value = usize::from_ne_bytes(bytes) & !0xff;
-    let mut draws = 0;
+}
+
+/// Sets `__stack_chk_guard` to `value`, the canary AT_RANDOM gave, or, when
+/// that is 0, to one a blocking `getrandom` gives. A process that has neither
+/// ends with `abort`: the canary never takes a value that is the same in
+/// every process. The low byte of the canary is zero.
+///
+/// `relibc_start_v1` does not return and the functions it calls before this
+/// one are Rust, which has no stack protector, so the canary changes under no
+/// frame that checks it.
+#[inline(never)]
+unsafe fn init_stack_guard(mut value: usize) {
+    const WORD: usize = core::mem::size_of::<usize>();
+
+    let mut bytes = [0u8; WORD];
+    let mut zero_draws = 0;
     while value == 0 {
         // A wait for the first seed that a signal handler ended goes on.
         match Sys::getrandom(&mut bytes, 0) {
             Ok(WORD) => {
                 value = usize::from_ne_bytes(bytes) & !0xff;
-                draws += 1;
+                zero_draws += 1;
                 // A generator that gives only zero is no generator.
-                if value == 0 && draws == 8 {
+                if value == 0 && zero_draws == 8 {
                     unsafe { stdlib::abort() };
                 }
             }
@@ -316,8 +326,10 @@ pub unsafe extern "C" fn relibc_start_v1(
     // Ensure correct host system before executing more system calls
     unsafe { relibc_verify_host() };
 
-    // The canary of the stack protector, before anything that uses it runs.
-    unsafe { init_stack_guard(sp) };
+    // The canary of the stack protector from AT_RANDOM, before anything that
+    // uses it runs; the fallback of `getrandom` goes in the next block, once
+    // the thread has its TCB.
+    let guard_from_aux = unsafe { stack_guard_from_auxv(sp) };
 
     #[cfg(target_os = "redox")]
     let thr_fd = redox_rt::proc::FdGuard::new(
@@ -360,6 +372,10 @@ pub unsafe extern "C" fn relibc_start_v1(
     {
         redox_rt::TLS_ACTIVATED.store(true, core::sync::atomic::Ordering::Relaxed);
     }
+
+    // No AT_RANDOM: a blocking `getrandom` (it needs the thread's TCB). Only
+    // Rust has run so far, which has no stack protector.
+    unsafe { init_stack_guard(guard_from_aux) };
 
     let is_dynamically_linked = if let Some(tcb) = unsafe { ld_so::tcb::Tcb::current() } {
         #[cfg(target_os = "redox")]
