@@ -17,7 +17,7 @@ use crate::{
         errno::{EFAULT, EINVAL},
         fcntl::{O_CREAT, O_EXCL, O_RDONLY, O_RDWR},
         sys_stat::{fchmod, fstat},
-        sys_ipc::{IPC_RMID, IPC_SET, IPC_STAT, ipc_perm},
+        sys_ipc::{IPC_CREAT, IPC_RMID, IPC_SET, IPC_STAT, ipc_perm},
         sys_mman::{MAP_SHARED, PROT_READ, PROT_WRITE, shm_open, shm_unlink},
         unistd::{close, ftruncate},
     },
@@ -88,8 +88,10 @@ fn file_path(serial: u64) -> CString {
 }
 
 /// A number nobody can guess before the file of the segment is there: the
-/// process's generator, keyed by the entropy service.
-fn nonce() -> u64 {
+/// process's generator, keyed by the entropy service. None when the process
+/// has no source of entropy: a name that others can guess would let them
+/// take the file of the segment, and the service refuses a zero.
+fn nonce() -> Option<u64> {
     let mut bytes = [0u8; 8];
     for _ in 0..4 {
         let n = unsafe {
@@ -97,10 +99,13 @@ fn nonce() -> u64 {
         };
         let value = u64::from_ne_bytes(bytes);
         if n == 8 && value != 0 {
-            return value;
+            return Some(value);
+        }
+        if n < 0 && crate::platform::ERRNO.get() != crate::header::errno::EINTR {
+            return None;
         }
     }
-    0
+    None
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/shmget.html>.
@@ -110,11 +115,25 @@ pub unsafe extern "C" fn shmget(key: key_t, size: size_t, shmflg: c_int) -> c_in
     // that name already there (it cannot be, unless the draw was bad) draws
     // again.
     for _ in 0..5 {
+        // Only a call that may create a segment takes a number; one that looks
+        // up a segment by its key (no IPC_CREAT) sends none, which the service
+        // does not read. Without entropy a call that may create fails with
+        // ENOSYS before it asks the service: there is no number to use, and 0
+        // is never one.
+        let creates = key == 0 || shmflg & IPC_CREAT != 0;
+        let number = if creates {
+            match nonce() {
+                Some(number) => number,
+                None => return fail(crate::header::errno::ENOSYS),
+            }
+        } else {
+            0
+        };
         let words = [
             u64::from(key as u32),
             size as u64,
             shmflg as u64,
-            nonce(),
+            number,
             0,
         ];
         let reply = match ipc::ipc(ipc::op::SHM_GET, &words, 4, &[], &mut [], ipc::NO_DEADLINE) {

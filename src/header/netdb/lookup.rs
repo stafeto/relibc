@@ -9,7 +9,7 @@ use crate::{
 
 use crate::header::{
     bits_arpainet::htons,
-    errno::{EAGAIN, EBADMSG, EINTR, EINVAL, EIO, ETIMEDOUT},
+    errno::{EAGAIN, EBADMSG, EINTR, EINVAL, EIO, ENOSYS, ETIMEDOUT},
     netinet_in::{IPPROTO_UDP, in_addr, sockaddr_in},
     poll::{POLLIN, pollfd},
     sys_socket::constants::{AF_INET, SOCK_CLOEXEC, SOCK_DGRAM},
@@ -46,16 +46,19 @@ fn monotonic_ms() -> i64 {
     i64::from(now.tv_sec) * 1_000 + i64::from(now.tv_nsec) / 1_000_000
 }
 
-/// 16 random bits for the transaction number (RFC 5452, 9.2); the clock when
-/// the entropy source fails.
-fn transaction_id() -> u16 {
+/// 16 random bits for the transaction number (RFC 5452, 9.2), from the
+/// system's generator and from nothing else: a number from the clock would be
+/// one that an attacker can guess. None when the process has no source of
+/// entropy; a wait for the first seed that a signal handler ended goes on.
+fn transaction_id() -> Option<u16> {
     let mut bytes = [0u8; 2];
-    if matches!(Sys::getrandom(&mut bytes, 0), Ok(2)) {
-        return u16::from_ne_bytes(bytes);
+    loop {
+        match Sys::getrandom(&mut bytes, 0) {
+            Ok(2) => return Some(u16::from_ne_bytes(bytes)),
+            Err(Errno(EINTR)) => continue,
+            _ => return None,
+        }
     }
-    let mut now = timespec::default();
-    let _ = Sys::clock_gettime(time::constants::CLOCK_REALTIME, Out::from_mut(&mut now));
-    (now.tv_nsec >> 8) as u16
 }
 
 fn socket_address(server: u32) -> [u8; size_of::<sockaddr_in>()] {
@@ -124,7 +127,8 @@ fn judge(
 /// Asks the servers of `resolv.conf` for the records of `q_type` of `name`:
 /// `ATTEMPTS` rounds, in each the servers in turn, each with `SEND_TIMEOUT_MS`.
 /// Errors: `ETIMEDOUT` when nobody answered, `EAGAIN` when servers failed or
-/// refused, `EBADMSG` for a reply that does not parse.
+/// refused, `EBADMSG` for a reply that does not parse, `ENOSYS` when the
+/// process has no source of entropy for the transaction number.
 fn query(name: &str, q_type: u16) -> Result<Vec<DnsAnswer>, Errno> {
     let name = name.trim_end_matches('.');
     // A label past 63 bytes would read as a pointer to the server, and the
@@ -141,7 +145,8 @@ fn query(name: &str, q_type: u16) -> Result<Vec<DnsAnswer>, Errno> {
         return Err(Errno(EIO));
     }
 
-    let id = transaction_id();
+    // Without entropy the lookup fails (EAI_SYSTEM with ENOSYS for getaddrinfo).
+    let id = transaction_id().ok_or(Errno(ENOSYS))?;
     let packet = Dns {
         transaction_id: id,
         flags: 0x0100,

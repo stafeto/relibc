@@ -1687,11 +1687,12 @@ unsafe extern "C" fn tmpnam_inner(buf: *mut c_char, offset: usize) -> *mut c_cha
         #[expect(deprecated)]
         stdlib::mktemp(buf)
     };
-    platform::ERRNO.set(err);
-
     if unsafe { *buf } == 0 {
+        // A name that could not be made leaves the errno of the failure
+        // (ENOSYS without a source of entropy), which tempnam reports.
         ptr::null_mut()
     } else {
+        platform::ERRNO.set(err);
         buf
     }
 }

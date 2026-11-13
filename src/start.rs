@@ -250,6 +250,62 @@ unsafe fn run_array((start, count): (*const extern "C" fn(), usize)) {
     }
 }
 
+/// The canary the 16 bytes AT_RANDOM points to give, with the low byte
+/// cleared so that a string copy stops at it; 0 when the vector has no
+/// AT_RANDOM or its bytes are all zero.
+#[inline(never)]
+unsafe fn stack_guard_from_auxv(sp: &Stack) -> usize {
+    use crate::platform::auxv_defs::AT_RANDOM;
+    const WORD: usize = core::mem::size_of::<usize>();
+
+    let at = unsafe { crate::platform::get_auxv_raw(sp.auxv().cast(), AT_RANDOM) };
+    match at.filter(|at| *at != 0) {
+        Some(at) => {
+            let mut bytes = [0u8; WORD];
+            // SAFETY: the loader names 16 readable bytes.
+            bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(at as *const u8, WORD) });
+            usize::from_ne_bytes(bytes) & !0xff
+        }
+        None => 0,
+    }
+}
+
+/// Sets `__stack_chk_guard` to `value`, the canary AT_RANDOM gave, or, when
+/// that is 0, to one a blocking `getrandom` gives. A process that has neither
+/// ends with `abort`: the canary never takes a value that is the same in
+/// every process. The low byte of the canary is zero.
+///
+/// `relibc_start_v1` does not return and the functions it calls before this
+/// one are Rust, which has no stack protector, so the canary changes under no
+/// frame that checks it.
+#[inline(never)]
+unsafe fn init_stack_guard(mut value: usize) {
+    const WORD: usize = core::mem::size_of::<usize>();
+
+    let mut bytes = [0u8; WORD];
+    let mut zero_draws = 0;
+    while value == 0 {
+        // A wait for the first seed that a signal handler ended goes on.
+        match Sys::getrandom(&mut bytes, 0) {
+            Ok(WORD) => {
+                value = usize::from_ne_bytes(bytes) & !0xff;
+                zero_draws += 1;
+                // A generator that gives only zero is no generator.
+                if value == 0 && zero_draws == 8 {
+                    unsafe { stdlib::abort() };
+                }
+            }
+            Err(crate::error::Errno(crate::header::errno::EINTR)) => {}
+            _ => unsafe { stdlib::abort() },
+        }
+    }
+    unsafe { stdlib::set_stack_guard(value) };
+    // The bytes of the stack do not outlive the call.
+    for b in bytes.iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+}
+
 #[inline(never)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn relibc_start_v1(
@@ -269,6 +325,14 @@ pub unsafe extern "C" fn relibc_start_v1(
 
     // Ensure correct host system before executing more system calls
     unsafe { relibc_verify_host() };
+
+    // The canary of the stack protector from AT_RANDOM, before anything that
+    // uses it runs; the fallback of `getrandom` goes after the platform's
+    // start, which attaches the thread to the system that answers it.
+    let guard_from_aux = unsafe { stack_guard_from_auxv(sp) };
+    if guard_from_aux != 0 {
+        unsafe { stdlib::set_stack_guard(guard_from_aux) };
+    }
 
     #[cfg(target_os = "redox")]
     let thr_fd = redox_rt::proc::FdGuard::new(
@@ -343,10 +407,15 @@ pub unsafe extern "C" fn relibc_start_v1(
     let auxvs = unsafe { get_auxvs(sp.auxv().cast()) };
     if !is_dynamically_linked {
         unsafe { crate::platform::init(auxvs) };
+        // No AT_RANDOM: a blocking `getrandom`. Before the constructors of
+        // the arrays; only Rust has run so far, which has no stack protector.
+        unsafe { init_stack_guard(guard_from_aux) };
         init_array();
         if unsafe { crate::platform::logger::init().is_err() } {
             log::error!("Logger has already been initialised");
         }
+    } else {
+        unsafe { init_stack_guard(guard_from_aux) };
     }
 
     // (It would technically have been equally valid to just allow the option to be set to "1".)
