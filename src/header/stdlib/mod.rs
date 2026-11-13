@@ -147,6 +147,9 @@ pub(crate) unsafe fn set_stack_guard(value: uintptr_t) {
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __stack_chk_fail() -> ! {
+    // The process may be in a bad state: the line goes out with the write
+    // call, with no buffer and no lock.
+    crate::start::write_stderr(b"stack smashing detected\n");
     unsafe { abort() };
 }
 
@@ -870,10 +873,8 @@ fn random_alphanumerics(out: &mut [u8]) -> bool {
     let mut filled = 0;
     while filled < out.len() {
         let mut bytes = [0u8; 16];
-        match Sys::getrandom(&mut bytes, 0) {
-            Ok(16) => {}
-            Err(Errno(EINTR)) => continue,
-            _ => return false,
+        if crate::header::sys_random::fill(&mut bytes).is_err() {
+            return false;
         }
         for b in bytes {
             if b < 248 && filled < out.len() {
@@ -885,17 +886,32 @@ fn random_alphanumerics(out: &mut [u8]) -> bool {
     true
 }
 
-/// A word of the system's generator. A process that has none cannot go on
+/// The 8 bytes of AT_RANDOM that the canary does not use (0 when there are
+/// none, or after the first call of arc4random has taken them). The first
+/// arc4random output starts from them, so a process that never needs more
+/// asks the entropy service for nothing.
+static ARC4_FIRST: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Keeps the spare bytes of AT_RANDOM for the first arc4random call.
+pub(crate) fn set_arc4random_first(value: u64) {
+    ARC4_FIRST.store(value, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Bytes of the system's generator. A process that has none cannot go on
 /// in safety, so the call ends it, as on OpenBSD.
 fn arc4random_fill(out: &mut [u8]) {
-    // A wait for the first seed that a signal handler ended goes on, as
-    // getentropy's does: arc4random has no way to fail.
-    loop {
-        match Sys::getrandom(out, 0) {
-            Err(Errno(EINTR)) => continue,
-            Ok(n) if n == out.len() => return,
-            _ => unsafe { abort() },
-        }
+    let first = ARC4_FIRST.swap(0, core::sync::atomic::Ordering::Relaxed);
+    let mut out = out;
+    if first != 0 {
+        let n = out.len().min(8);
+        let (head, rest) = out.split_at_mut(n);
+        head.copy_from_slice(&first.to_ne_bytes()[..n]);
+        out = rest;
+    }
+    // A short read and a wait for the first seed that a signal handler
+    // ended go on, as getentropy's do: arc4random has no way to fail.
+    if crate::header::sys_random::fill(out).is_err() {
+        unsafe { abort() };
     }
 }
 

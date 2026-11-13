@@ -4,12 +4,11 @@
 
 use ::scrypt::password_hash::{Salt, SaltString};
 use alloc::string::{String, ToString};
-use core::ptr;
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use core::{cell::Cell, ptr};
 
 use crate::{
     c_str::CStr,
-    header::{errno::EINVAL, stdlib::rand},
+    header::errno::{EINVAL, ENOSYS},
     platform::{
         self,
         types::{c_char, c_int},
@@ -57,10 +56,20 @@ impl crypt_data {
     }
 }
 
+/// Set by `gen_salt` when the process has no generator, so that `crypt_r`
+/// reports ENOSYS and not EINVAL for the setting.
+#[thread_local]
+static NO_ENTROPY: Cell<bool> = Cell::new(false);
+
+/// A salt from the system's generator and from nothing else: a salt that
+/// others can guess is no salt, and the caller's `rand` sequence stays as it
+/// is. None, with `NO_ENTROPY` set, when the process has no generator.
 fn gen_salt() -> Option<String> {
-    let mut rng = SmallRng::seed_from_u64(unsafe { u64::from(rand().cast_unsigned()) });
     let mut bytes = [0u8; Salt::RECOMMENDED_LENGTH];
-    rng.fill_bytes(&mut bytes);
+    if crate::header::sys_random::fill(&mut bytes).is_err() {
+        NO_ENTROPY.set(true);
+        return None;
+    }
     Some(SaltString::encode_b64(&bytes).ok()?.as_str().to_string())
 }
 
@@ -71,6 +80,7 @@ pub unsafe extern "C" fn crypt_r(
     setting: *const c_char,
     data: *mut crypt_data,
 ) -> *mut c_char {
+    NO_ENTROPY.set(false);
     if unsafe { (*data).initialized } == 0 {
         unsafe { *data = crypt_data::new() };
     }
@@ -137,7 +147,7 @@ pub unsafe extern "C" fn crypt_r(
             dst
         }
     } else {
-        platform::ERRNO.set(EINVAL);
+        platform::ERRNO.set(if NO_ENTROPY.get() { ENOSYS } else { EINVAL });
         ptr::null_mut()
     }
 }

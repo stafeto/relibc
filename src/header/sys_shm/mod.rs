@@ -93,16 +93,12 @@ fn file_path(serial: u64) -> CString {
 /// take the file of the segment, and the service refuses a zero.
 fn nonce() -> Option<u64> {
     let mut bytes = [0u8; 8];
+    // A draw of zero is drawn again; a short read goes on in `fill`.
     for _ in 0..4 {
-        let n = unsafe {
-            crate::header::sys_random::getrandom(bytes.as_mut_ptr().cast(), bytes.len(), 0)
-        };
+        crate::header::sys_random::fill(&mut bytes).ok()?;
         let value = u64::from_ne_bytes(bytes);
-        if n == 8 && value != 0 {
+        if value != 0 {
             return Some(value);
-        }
-        if n < 0 && crate::platform::ERRNO.get() != crate::header::errno::EINTR {
-            return None;
         }
     }
     None

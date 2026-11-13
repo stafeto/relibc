@@ -55,7 +55,7 @@ pub fn crypt_pbkdf2(passw: &[u8], setting: &str) -> Option<String> {
         Some(format!(
             "$8${}${}${}",
             iter_str,
-            salt,
+            actual_salt,
             Base64Bcrypt::encode_string(&buffer)
         ))
     } else {
