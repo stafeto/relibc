@@ -513,6 +513,9 @@ pub unsafe extern "C" fn fork() -> pid_t {
     }
     let pid = unsafe { Sys::fork() }.or_minus_one_errno();
     if pid == 0 {
+        // The spare bytes of AT_RANDOM are the parent's: the child's first arc4random
+        // output must not repeat the parent's.
+        crate::header::stdlib::set_arc4random_first(0);
         for child in unsafe { &fork_hooks[2] } {
             child();
         }

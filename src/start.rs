@@ -250,24 +250,54 @@ unsafe fn run_array((start, count): (*const extern "C" fn(), usize)) {
     }
 }
 
+/// Writes a line to standard error with the write call, with no buffer and
+/// no lock: the caller may be a process in a bad state. A failed write is
+/// not reported.
+pub(crate) fn write_stderr(msg: &[u8]) {
+    let mut rest = msg;
+    while !rest.is_empty() {
+        match Sys::write(2, rest) {
+            Ok(n) if n > 0 => rest = &rest[n..],
+            _ => return,
+        }
+    }
+}
+
 /// The canary the 16 bytes AT_RANDOM points to give, with the low byte
-/// cleared so that a string copy stops at it; 0 when the vector has no
-/// AT_RANDOM or its bytes are all zero.
+/// cleared so that a string copy stops at it, and the other 8 bytes for the
+/// first arc4random call; (0, 0) when the vector has no AT_RANDOM or its
+/// bytes are all zero.
 #[inline(never)]
-unsafe fn stack_guard_from_auxv(sp: &Stack) -> usize {
+unsafe fn stack_guard_from_auxv(sp: &Stack) -> (usize, u64) {
     use crate::platform::auxv_defs::AT_RANDOM;
     const WORD: usize = core::mem::size_of::<usize>();
 
     let at = unsafe { crate::platform::get_auxv_raw(sp.auxv().cast(), AT_RANDOM) };
     match at.filter(|at| *at != 0) {
         Some(at) => {
-            let mut bytes = [0u8; WORD];
+            let mut bytes = [0u8; 16];
             // SAFETY: the loader names 16 readable bytes.
-            bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(at as *const u8, WORD) });
-            usize::from_ne_bytes(bytes) & !0xff
+            bytes.copy_from_slice(unsafe { core::slice::from_raw_parts(at as *const u8, 16) });
+            let mut guard = [0u8; WORD];
+            guard.copy_from_slice(&bytes[..WORD]);
+            let mut spare = [0u8; 8];
+            spare.copy_from_slice(&bytes[8..]);
+            (
+                usize::from_ne_bytes(guard) & !0xff,
+                u64::from_ne_bytes(spare),
+            )
         }
-        None => 0,
+        None => (0, 0),
     }
+}
+
+/// Polls of the first seed, 50 ms apart, before the start says it waits.
+const WAIT_POLLS: u32 = 40;
+
+/// A process with no AT_RANDOM and no generator ends: the line says why.
+fn no_entropy_abort() -> ! {
+    write_stderr(b"no AT_RANDOM and no entropy\n");
+    unsafe { stdlib::abort() }
 }
 
 /// Sets `__stack_chk_guard` to `value`, the canary AT_RANDOM gave, or, when
@@ -284,19 +314,33 @@ unsafe fn init_stack_guard(mut value: usize) {
 
     let mut bytes = [0u8; WORD];
     let mut zero_draws = 0;
+    // The wait for the first seed: polled for about 2 s, then one line says
+    // what the process waits for and the blocking call goes on.
+    let mut polls = 0;
     while value == 0 {
-        // A wait for the first seed that a signal handler ended goes on.
-        match Sys::getrandom(&mut bytes, 0) {
-            Ok(WORD) => {
+        let flags = if polls < WAIT_POLLS { crate::header::sys_random::GRND_NONBLOCK } else { 0 };
+        match crate::header::sys_random::fill_with(&mut bytes, |rest| Sys::getrandom(rest, flags)) {
+            Ok(()) => {
                 value = usize::from_ne_bytes(bytes) & !0xff;
                 zero_draws += 1;
                 // A generator that gives only zero is no generator.
                 if value == 0 && zero_draws == 8 {
-                    unsafe { stdlib::abort() };
+                    no_entropy_abort();
                 }
             }
-            Err(crate::error::Errno(crate::header::errno::EINTR)) => {}
-            _ => unsafe { stdlib::abort() },
+            Err(crate::error::Errno(crate::header::errno::EAGAIN)) if polls < WAIT_POLLS => {
+                polls += 1;
+                if polls == WAIT_POLLS {
+                    write_stderr(b"waiting for entropy\n");
+                } else {
+                    let pause = crate::header::time::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 50_000_000,
+                    };
+                    let _ = unsafe { Sys::nanosleep(&pause, ptr::null_mut()) };
+                }
+            }
+            _ => no_entropy_abort(),
         }
     }
     unsafe { stdlib::set_stack_guard(value) };
@@ -329,9 +373,10 @@ pub unsafe extern "C" fn relibc_start_v1(
     // The canary of the stack protector from AT_RANDOM, before anything that
     // uses it runs; the fallback of `getrandom` goes after the platform's
     // start, which attaches the thread to the system that answers it.
-    let guard_from_aux = unsafe { stack_guard_from_auxv(sp) };
+    let (guard_from_aux, arc4_first) = unsafe { stack_guard_from_auxv(sp) };
     if guard_from_aux != 0 {
         unsafe { stdlib::set_stack_guard(guard_from_aux) };
+        stdlib::set_arc4random_first(arc4_first);
     }
 
     #[cfg(target_os = "redox")]
