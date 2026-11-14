@@ -331,7 +331,7 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
         let mut attr = MaybeUninit::<pthread_attr_t>::uninit();
         unsafe {
             if pthread_attr_init(attr.as_mut_ptr()) == 0 {
-                let param = sched_param { sched_priority: 32 };
+                let param = sched_param::with_priority(32);
                 if pthread_attr_setinheritsched(attr.as_mut_ptr(), PTHREAD_EXPLICIT_SCHED) == 0
                     && pthread_attr_setschedpolicy(attr.as_mut_ptr(), SCHED_FIFO) == 0
                     && pthread_attr_setschedparam(attr.as_mut_ptr(), &param) == 0

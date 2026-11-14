@@ -10,7 +10,9 @@ use crate::{
 /// Used to identify a thread attribute object.
 #[repr(C)]
 pub union pthread_attr_t {
-    __relibc_internal_size: [c_uchar; 32],
+    // 80 bytes: the scheduling parameters (struct sched_param, 48 bytes) are
+    // held whole, with the sporadic server members.
+    __relibc_internal_size: [c_uchar; 80],
     __relibc_internal_align: size_t,
 }
 
