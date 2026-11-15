@@ -20,8 +20,8 @@ use crate::{
 /// Scheduling parameters required for each supported scheduling policy: the
 /// priority, and the members of the sporadic server option (48 bytes on
 /// AArch64). The policies SCHED_OTHER, SCHED_FIFO and SCHED_RR read the
-/// priority alone. `pthread_attr_t` (80 bytes) and `posix_spawnattr_t`
-/// (80 bytes) hold the whole structure.
+/// priority alone. `pthread_attr_t` and `posix_spawnattr_t` (96 bytes each,
+/// 16 of them reserved) hold the whole structure.
 #[allow(non_camel_case_types)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]

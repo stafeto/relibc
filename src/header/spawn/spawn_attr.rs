@@ -46,7 +46,13 @@ pub struct posix_spawnattr_t {
     pub(crate) policy: c_int,
     pub sigdefault: sigset_t,
     pub sigmask: sigset_t,
+    /// Reserved for later members, so that they need no new ABI series.
+    /// Zeroed by `posix_spawnattr_init`.
+    pub(crate) reserved: [u64; 2],
 }
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<posix_spawnattr_t>() == 96);
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/posix_spawnattr_init.html>.
 ///
