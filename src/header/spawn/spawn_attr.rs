@@ -1,5 +1,5 @@
 use core::{
-    ffi::{c_int, c_short},
+    ffi::{c_int, c_short, c_ulong},
     mem::zeroed,
 };
 
@@ -48,7 +48,7 @@ pub struct posix_spawnattr_t {
     pub sigmask: sigset_t,
     /// Reserved for later members, so that they need no new ABI series.
     /// Zeroed by `posix_spawnattr_init`.
-    pub(crate) reserved: [u64; 2],
+    pub(crate) reserved: [c_ulong; 2],
 }
 
 #[cfg(target_pointer_width = "64")]
