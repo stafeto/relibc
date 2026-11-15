@@ -391,7 +391,7 @@ pub unsafe extern "C" fn pthread_attr_setschedpolicy(
     policy: c_int,
 ) -> c_int {
     match policy {
-        SCHED_FIFO | SCHED_OTHER | SCHED_RR | SCHED_SPORADIC => {
+        SCHED_FIFO | SCHED_OTHER | SCHED_RR => {
             // infallible, value of constants fit into `c_uchar`
             if let Ok(pol) = policy.try_into() {
                 // SAFTEY: guaranteed to fit
@@ -401,6 +401,9 @@ pub unsafe extern "C" fn pthread_attr_setschedpolicy(
             }
             0
         }
+        // stafeto: SCHED_SPORADIC is defined for compilation and no thread
+        // can take it (the option macros are 0): an unsupported value.
+        SCHED_SPORADIC => crate::header::errno::ENOTSUP,
         _ => crate::header::errno::EINVAL,
     }
 }

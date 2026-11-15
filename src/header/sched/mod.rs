@@ -119,6 +119,7 @@ pub unsafe extern "C" fn sched_getparam(pid: pid_t, param: *mut sched_param) -> 
     }
     match Sys::sched_getparam(pid) {
         Ok(got) => {
+            // SAFETY: the caller's promise: `param` points to a `sched_param`.
             unsafe { param.write(got) };
             0
         }
@@ -165,7 +166,9 @@ pub unsafe extern "C" fn sched_setparam(pid: pid_t, param: *const sched_param) -
     if param.is_null() {
         return fail(errno::EINVAL);
     }
-    Sys::sched_set(pid, -1, unsafe { &*param }).map(|_| 0).or_minus_one_errno()
+    // SAFETY: `param` is not null and, by the caller's promise, points to a `sched_param`.
+    let param = unsafe { &*param };
+    Sys::sched_set(pid, -1, param).map(|_| 0).or_minus_one_errno()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sched_setscheduler.html>.
@@ -183,7 +186,9 @@ pub unsafe extern "C" fn sched_setscheduler(
     if param.is_null() || policy < 0 {
         return fail(errno::EINVAL);
     }
-    Sys::sched_set(pid, policy, unsafe { &*param }).or_minus_one_errno()
+    // SAFETY: `param` is not null and, by the caller's promise, points to a `sched_param`.
+    let param = unsafe { &*param };
+    Sys::sched_set(pid, policy, param).or_minus_one_errno()
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/sched_yield.html>.

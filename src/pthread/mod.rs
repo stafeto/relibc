@@ -751,7 +751,10 @@ pub fn get_cpu_clkid(thread: &Pthread) -> Result<clockid_t, Errno> {
 }
 pub fn get_sched_param(thread: &Pthread) -> Result<(c_int, sched_param), Errno> {
     #[cfg(stafeto)]
-    return crate::platform::sys::thread_sched_get(unsafe { thread.os_tid.get().read() });
+    return crate::platform::sys::thread_sched_get(
+        // SAFETY: the thread's `os_tid` is set before the `Pthread` is shared.
+        unsafe { thread.os_tid.get().read() },
+    );
     #[cfg(not(stafeto))]
     {
         let _ = thread;

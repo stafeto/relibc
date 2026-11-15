@@ -639,6 +639,7 @@ pub(crate) fn thread_cpu_clock(os_tid: crate::pthread::OsTid) -> clockid_t {
 pub(crate) fn thread_sched_get(os_tid: crate::pthread::OsTid) -> Result<(c_int, sched_param)> {
     let mut policy = 0;
     let mut param = sched_param::with_priority(0);
+    // SAFETY: `policy` and `param` are live locals the layer fills.
     ret(unsafe {
         stafeto_thread_sched_get(os_tid.thread_id as c_int, &raw mut policy, &raw mut param)
     } as isize)
@@ -653,6 +654,7 @@ pub(crate) fn thread_sched_set(
     param: &sched_param,
     tail: bool,
 ) -> Result<()> {
+    // SAFETY: `param` is a live reference the layer reads.
     ret(unsafe {
         stafeto_thread_sched_set(os_tid.thread_id as c_int, policy, param, c_int::from(tail))
     } as isize)
@@ -661,6 +663,7 @@ pub(crate) fn thread_sched_set(
 
 /// The policy and priority of the thread pthread_create makes next.
 pub(crate) fn thread_next_sched(policy: c_int, param: &sched_param) -> Result<()> {
+    // SAFETY: `param` is a live reference the layer reads.
     ret(unsafe { stafeto_thread_next_sched(policy, param) } as isize).map(|_| ())
 }
 
@@ -766,6 +769,7 @@ impl Sys {
 
     pub fn sched_getparam(pid: pid_t) -> Result<sched_param> {
         let mut param = sched_param::with_priority(0);
+        // SAFETY: `param` is a live local the layer fills.
         ret(unsafe { stafeto_sched_getparam(pid, &raw mut param) } as isize).map(|_| param)
     }
 
@@ -788,6 +792,7 @@ impl Sys {
     }
 
     pub fn sched_set(pid: pid_t, policy: c_int, param: &sched_param) -> Result<c_int> {
+        // SAFETY: `param` is a live reference the layer reads.
         ret(unsafe { stafeto_sched_set(pid, policy, param) } as isize).map(|v| v as c_int)
     }
 

@@ -161,8 +161,6 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         | _SC_THREAD_PROCESS_SHARED
         | _SC_SEMAPHORES
         | _SC_SPAWN
-        | _SC_SPORADIC_SERVER
-        | _SC_THREAD_SPORADIC_SERVER
         | _SC_THREADS
         | _SC_THREAD_ATTR_STACKADDR
         | _SC_THREAD_ATTR_STACKSIZE
