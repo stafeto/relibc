@@ -6,7 +6,7 @@ use crate::{
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/time.h.html>.
 #[allow(non_camel_case_types)]
 #[repr(C)]
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct timespec {
     /// Whole seconds.
     pub tv_sec: time_t,

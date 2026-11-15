@@ -15,17 +15,50 @@ use crate::{
     },
 };
 
-// TODO: There are extensions, but adding more member is breaking ABI for pthread_attr_t
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sched.h.html>.
 ///
-/// Scheduling parameters required for each supported scheduling policy.
+/// Scheduling parameters required for each supported scheduling policy: the
+/// priority, and the members of the sporadic server option (48 bytes on
+/// AArch64). The policies SCHED_OTHER, SCHED_FIFO and SCHED_RR read the
+/// priority alone. `pthread_attr_t` and `posix_spawnattr_t` (96 bytes each,
+/// 16 of them reserved) hold the whole structure.
 #[allow(non_camel_case_types)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct sched_param {
     /// Process or thread execution scheduling priority.
     pub sched_priority: c_int,
+    /// Low scheduling priority for a sporadic server.
+    pub sched_ss_low_priority: c_int,
+    /// Replenishment period of a sporadic server.
+    pub sched_ss_repl_period: timespec,
+    /// Initial budget of a sporadic server.
+    pub sched_ss_init_budget: timespec,
+    /// Maximum pending replenishments of a sporadic server.
+    pub sched_ss_max_repl: c_int,
 }
+
+impl sched_param {
+    /// A parameter structure with this priority and every other member zero.
+    pub const fn with_priority(sched_priority: c_int) -> Self {
+        sched_param {
+            sched_priority,
+            sched_ss_low_priority: 0,
+            sched_ss_repl_period: timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            sched_ss_init_budget: timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            },
+            sched_ss_max_repl: 0,
+        }
+    }
+}
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<sched_param>() == 48);
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/sched.h.html>.
 ///
@@ -80,7 +113,7 @@ pub unsafe extern "C" fn sched_getparam(pid: pid_t, param: *mut sched_param) -> 
     }
     match Sys::sched_getparam(pid) {
         Ok(priority) => {
-            unsafe { param.write(sched_param { sched_priority: priority }) };
+            unsafe { param.write(sched_param::with_priority(priority)) };
             0
         }
         Err(Errno(n)) => fail(n),

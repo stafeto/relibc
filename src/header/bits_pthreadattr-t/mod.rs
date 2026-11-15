@@ -10,8 +10,14 @@ use crate::{
 /// Used to identify a thread attribute object.
 #[repr(C)]
 pub union pthread_attr_t {
-    __relibc_internal_size: [c_uchar; 32],
+    // 96 bytes: the scheduling parameters (struct sched_param, 48 bytes) are
+    // held whole, with the sporadic server members, and 16 bytes are
+    // reserved for later members.
+    __relibc_internal_size: [c_uchar; 96],
     __relibc_internal_align: size_t,
 }
 
 pthread_assert_equal_size!(pthread_attr_t, RlctAttr);
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::size_of::<pthread_attr_t>() == 96);

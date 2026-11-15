@@ -42,10 +42,8 @@ impl Default for RlctAttr {
             // TODO
             #[cfg(not(stafeto))]
             stacksize: 1024 * 1024,
-            param: sched_param {
-                // TODO
-                sched_priority: 0,
-            },
+            param: sched_param::with_priority(0),
+            reserved: [0; 2],
             #[cfg(target_pointer_width = "32")]
             _pad: [0; 12],
         }

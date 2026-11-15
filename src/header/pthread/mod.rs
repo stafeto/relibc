@@ -33,6 +33,9 @@ pub(crate) struct RlctAttr {
     pub stacksize: size_t,
     pub stack: size_t,
     pub param: sched_param,
+    /// Reserved for later members (a CPU mask, a signal mask), so that they
+    /// need no new ABI series. Zeroed by `pthread_attr_init`.
+    pub reserved: [u64; 2],
     #[cfg(target_pointer_width = "32")]
     _pad: [u8; 12],
 }

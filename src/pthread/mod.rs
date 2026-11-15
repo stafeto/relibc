@@ -755,9 +755,7 @@ pub fn get_sched_param(thread: &Pthread) -> Result<(c_int, sched_param), Errno> 
         .map(|(policy, priority)| {
             (
                 policy,
-                sched_param {
-                    sched_priority: priority,
-                },
+                sched_param::with_priority(priority),
             )
         });
     #[cfg(not(stafeto))]
