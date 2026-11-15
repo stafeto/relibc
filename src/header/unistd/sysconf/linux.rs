@@ -172,6 +172,8 @@ fn stafeto_option(name: c_int) -> Option<c_long> {
         _SC_TIMER_MAX => 32,
         _SC_DELAYTIMER_MAX => 2147483647,
         _SC_SIGQUEUE_MAX => 32,
+        // The replenishments the kernel's budget keeps pending (SS_REPL_MAX).
+        _SC_SS_REPL_MAX => 4,
         _SC_JOB_CONTROL | _SC_SAVED_IDS | _SC_SHELL => 1,
         // The message queues and named semaphores of the pipe service: the
         // descriptors a process opens (those of the sockets, 20 for a session),

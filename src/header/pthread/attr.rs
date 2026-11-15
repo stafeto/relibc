@@ -8,7 +8,7 @@ use crate::{
             PTHREAD_CREATE_DETACHED, PTHREAD_CREATE_JOINABLE, PTHREAD_EXPLICIT_SCHED,
             PTHREAD_INHERIT_SCHED, PTHREAD_SCOPE_PROCESS, PTHREAD_SCOPE_SYSTEM, RlctAttr,
         },
-        sched::{SCHED_FIFO, SCHED_OTHER, SCHED_RR, sched_param},
+        sched::{SCHED_FIFO, SCHED_OTHER, SCHED_RR, SCHED_SPORADIC, sched_param},
     },
     platform::types::{c_int, c_long, c_uchar, c_void, size_t},
     pthread::{Pthread, PthreadFlags},
@@ -401,6 +401,9 @@ pub unsafe extern "C" fn pthread_attr_setschedpolicy(
             }
             0
         }
+        // stafeto: SCHED_SPORADIC is defined for compilation and no thread
+        // can take it (the option macros are 0): an unsupported value.
+        SCHED_SPORADIC => crate::header::errno::ENOTSUP,
         _ => crate::header::errno::EINVAL,
     }
 }

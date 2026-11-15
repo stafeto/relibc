@@ -137,7 +137,7 @@ struct NextSched;
 #[cfg(stafeto)]
 impl Drop for NextSched {
     fn drop(&mut self) {
-        let _ = crate::platform::sys::thread_next_sched(-1, 0);
+        let _ = crate::platform::sys::thread_next_sched(-1, &sched_param::with_priority(0));
     }
 }
 
@@ -157,7 +157,7 @@ pub(crate) unsafe fn create(
         if i32::from(attrs.inheritsched) == header::PTHREAD_EXPLICIT_SCHED {
             crate::platform::sys::thread_next_sched(
                 i32::from(attrs.schedpolicy),
-                attrs.param.sched_priority,
+                &attrs.param,
             )?;
         }
         NextSched
@@ -665,7 +665,7 @@ pub fn set_sched_param(
     return crate::platform::sys::thread_sched_set(
         unsafe { thread.os_tid.get().read() },
         policy,
-        param.sched_priority,
+        param,
         true,
     );
     #[cfg(not(stafeto))]
@@ -681,7 +681,7 @@ pub fn set_sched_priority(thread: &Pthread, prio: c_int) -> Result<(), Errno> {
     return crate::platform::sys::thread_sched_set(
         unsafe { thread.os_tid.get().read() },
         -1,
-        prio,
+        &sched_param::with_priority(prio),
         false,
     );
     #[cfg(not(stafeto))]
@@ -751,13 +751,10 @@ pub fn get_cpu_clkid(thread: &Pthread) -> Result<clockid_t, Errno> {
 }
 pub fn get_sched_param(thread: &Pthread) -> Result<(c_int, sched_param), Errno> {
     #[cfg(stafeto)]
-    return crate::platform::sys::thread_sched_get(unsafe { thread.os_tid.get().read() })
-        .map(|(policy, priority)| {
-            (
-                policy,
-                sched_param::with_priority(priority),
-            )
-        });
+    return crate::platform::sys::thread_sched_get(
+        // SAFETY: the thread's `os_tid` is set before the `Pthread` is shared.
+        unsafe { thread.os_tid.get().read() },
+    );
     #[cfg(not(stafeto))]
     {
         let _ = thread;

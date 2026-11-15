@@ -9,7 +9,7 @@ use crate::{
     header::{
         bits_sigset_t::sigset_t,
         errno::EINVAL,
-        sched::{SCHED_FIFO, SCHED_OTHER, SCHED_RR, sched_param},
+        sched::{SCHED_FIFO, SCHED_OTHER, SCHED_RR, SCHED_SPORADIC, sched_param},
     },
     platform::types::pid_t,
 };
@@ -163,7 +163,7 @@ pub unsafe extern "C" fn posix_spawnattr_setschedpolicy(
 ) -> c_int {
     let attr = unsafe { attr.as_mut().expect("posix_spawnattr_t cannot be NULL") };
     match schedpolicy {
-        SCHED_FIFO | SCHED_RR | SCHED_OTHER => attr.policy = schedpolicy,
+        SCHED_FIFO | SCHED_RR | SCHED_OTHER | SCHED_SPORADIC => attr.policy = schedpolicy,
         _ => return EINVAL,
     }
 
