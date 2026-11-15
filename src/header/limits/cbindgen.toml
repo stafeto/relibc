@@ -12,6 +12,7 @@ after_includes = """
 #define SYMLINK_MAX 511 // the longest link the stafeto file service keeps; SYMLINK_MAX in mod.rs is the same
 #define SYMLOOP_MAX 32 // the links the stafeto file service follows; SYMLOOP_MAX in mod.rs is the same
 #define NZERO 20 // the default nice value; _SC_NZERO in sysconf is the same
+#define SS_REPL_MAX 4 // the pending replenishments of a kernel time budget; _SC_SS_REPL_MAX in sysconf is the same
 """
 language = "C"
 no_includes = true

@@ -32,6 +32,7 @@ use crate::{
     ld_so::tcb::{OsSpecific, Tcb},
     out::Out,
 };
+use crate::header::sched::sched_param;
 use core::{fmt::Write, mem, num::NonZeroU64, ptr};
 use generic_rt::GenericTcb;
 
@@ -121,13 +122,14 @@ unsafe extern "C" {
     /// The policy of the process `pid` (0 for the caller's), or a negated
     /// errno (ESRCH, EPERM).
     fn stafeto_sched_getscheduler(pid: pid_t) -> c_int;
-    /// The priority of the process `pid` into `priority`: 0 or a negated errno.
-    fn stafeto_sched_getparam(pid: pid_t, priority: *mut c_int) -> c_int;
-    /// `policy` (negative: keep it) and `priority` for the process `pid`
-    /// (sched_setscheduler, sched_setparam): the previous policy, or a
+    /// The scheduling parameters of the process `pid` into `param` (the
+    /// priority and the members of the sporadic server): 0 or a negated errno.
+    fn stafeto_sched_getparam(pid: pid_t, param: *mut sched_param) -> c_int;
+    /// `policy` (negative: keep it) and the parameters `param` for the process
+    /// `pid` (sched_setscheduler, sched_setparam): the previous policy, or a
     /// negated errno (EINVAL, EPERM, ESRCH). The thread goes to the tail of
     /// its level (XSH 2.8.4).
-    fn stafeto_sched_set(pid: pid_t, policy: c_int, priority: c_int) -> c_int;
+    fn stafeto_sched_set(pid: pid_t, policy: c_int, param: *const sched_param) -> c_int;
     /// The CPUs that are up, at least 1.
     fn stafeto_cpu_count() -> c_int;
     /// The CPU the calling thread runs on.
@@ -138,15 +140,20 @@ unsafe extern "C" {
     /// The mask of the process `pid` from `size` bytes at `mask`: 0 or a
     /// negated errno (EINVAL, ESRCH, EPERM).
     fn stafeto_sched_setaffinity(pid: pid_t, size: usize, mask: *const u8) -> c_int;
-    /// The policy and priority of thread `tid`: 0 or a negated errno.
-    fn stafeto_thread_sched_get(tid: c_int, policy: *mut c_int, priority: *mut c_int) -> c_int;
-    /// `policy` (negative: keep it) and `priority` for thread `tid`
-    /// (pthread_setschedparam with `tail` 1, pthread_setschedprio with 0):
-    /// 0 or a negated errno.
-    fn stafeto_thread_sched_set(tid: c_int, policy: c_int, priority: c_int, tail: c_int) -> c_int;
-    /// The policy and priority of the next thread the caller makes (an
+    /// The policy and parameters of thread `tid`: 0 or a negated errno.
+    fn stafeto_thread_sched_get(tid: c_int, policy: *mut c_int, param: *mut sched_param) -> c_int;
+    /// `policy` (negative: keep it) and the parameters `param` for thread
+    /// `tid` (pthread_setschedparam with `tail` 1, pthread_setschedprio with
+    /// 0): 0 or a negated errno.
+    fn stafeto_thread_sched_set(
+        tid: c_int,
+        policy: c_int,
+        param: *const sched_param,
+        tail: c_int,
+    ) -> c_int;
+    /// The policy and parameters of the next thread the caller makes (an
     /// attribute object with PTHREAD_EXPLICIT_SCHED): 0 or a negated errno.
-    fn stafeto_thread_next_sched(policy: c_int, priority: c_int) -> c_int;
+    fn stafeto_thread_next_sched(policy: c_int, param: *const sched_param) -> c_int;
     /// Waits as `stafeto_futex_wait` while the thread `owner` holds the
     /// mutex word: the waiter's level goes to the owner (and along the
     /// chain of what the owner waits for) until the wait ends. EDEADLK for a
@@ -369,7 +376,8 @@ struct SpawnAttributes {
     mask: u64,
     default: u64,
     policy: c_int,
-    priority: c_int,
+    /// The spawn-schedparam, whole: the priority and the sporadic members.
+    param: sched_param,
 }
 
 /// A file action of posix_spawn as the layer takes it: OPEN (1) of `path`
@@ -430,7 +438,7 @@ pub(crate) unsafe fn dlsym_global(
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 23;
+const PLATFORM_INTERFACE: u64 = 24;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -628,12 +636,13 @@ pub(crate) fn thread_cpu_clock(os_tid: crate::pthread::OsTid) -> clockid_t {
 }
 
 /// pthread_getschedparam: the policy and priority of the thread `os_tid`.
-pub(crate) fn thread_sched_get(os_tid: crate::pthread::OsTid) -> Result<(c_int, c_int)> {
-    let (mut policy, mut priority) = (0, 0);
+pub(crate) fn thread_sched_get(os_tid: crate::pthread::OsTid) -> Result<(c_int, sched_param)> {
+    let mut policy = 0;
+    let mut param = sched_param::with_priority(0);
     ret(unsafe {
-        stafeto_thread_sched_get(os_tid.thread_id as c_int, &raw mut policy, &raw mut priority)
+        stafeto_thread_sched_get(os_tid.thread_id as c_int, &raw mut policy, &raw mut param)
     } as isize)
-    .map(|_| (policy, priority))
+    .map(|_| (policy, param))
 }
 
 /// pthread_setschedparam (`tail` true) and pthread_setschedprio (`tail`
@@ -641,18 +650,18 @@ pub(crate) fn thread_sched_get(os_tid: crate::pthread::OsTid) -> Result<(c_int, 
 pub(crate) fn thread_sched_set(
     os_tid: crate::pthread::OsTid,
     policy: c_int,
-    priority: c_int,
+    param: &sched_param,
     tail: bool,
 ) -> Result<()> {
     ret(unsafe {
-        stafeto_thread_sched_set(os_tid.thread_id as c_int, policy, priority, c_int::from(tail))
+        stafeto_thread_sched_set(os_tid.thread_id as c_int, policy, param, c_int::from(tail))
     } as isize)
     .map(|_| ())
 }
 
 /// The policy and priority of the thread pthread_create makes next.
-pub(crate) fn thread_next_sched(policy: c_int, priority: c_int) -> Result<()> {
-    ret(unsafe { stafeto_thread_next_sched(policy, priority) } as isize).map(|_| ())
+pub(crate) fn thread_next_sched(policy: c_int, param: &sched_param) -> Result<()> {
+    ret(unsafe { stafeto_thread_next_sched(policy, param) } as isize).map(|_| ())
 }
 
 /// The mutex word `addr`, which `owner` holds with PTHREAD_PRIO_INHERIT:
@@ -755,9 +764,9 @@ impl Sys {
         ret(unsafe { stafeto_sched_getscheduler(pid) } as isize).map(|v| v as c_int)
     }
 
-    pub fn sched_getparam(pid: pid_t) -> Result<c_int> {
-        let mut priority = 0;
-        ret(unsafe { stafeto_sched_getparam(pid, &raw mut priority) } as isize).map(|_| priority)
+    pub fn sched_getparam(pid: pid_t) -> Result<sched_param> {
+        let mut param = sched_param::with_priority(0);
+        ret(unsafe { stafeto_sched_getparam(pid, &raw mut param) } as isize).map(|_| param)
     }
 
     /// The CPUs that are up.
@@ -778,8 +787,8 @@ impl Sys {
         ret(unsafe { stafeto_sched_setaffinity(pid, size, mask) } as isize).map(|v| v as c_int)
     }
 
-    pub fn sched_set(pid: pid_t, policy: c_int, priority: c_int) -> Result<c_int> {
-        ret(unsafe { stafeto_sched_set(pid, policy, priority) } as isize).map(|v| v as c_int)
+    pub fn sched_set(pid: pid_t, policy: c_int, param: &sched_param) -> Result<c_int> {
+        ret(unsafe { stafeto_sched_set(pid, policy, param) } as isize).map(|v| v as c_int)
     }
 
     /// Assign the slave device's ownership through its master description.
@@ -1688,7 +1697,7 @@ unsafe fn spawn_search(
             mask: attr.sigmask,
             default: attr.sigdefault,
             policy: attr.policy,
-            priority: attr.param.sched_priority,
+            param: attr.param,
         });
         let attributes = attributes
             .as_ref()

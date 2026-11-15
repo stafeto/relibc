@@ -127,6 +127,7 @@ pub const _POSIX_RTSIG_MAX: c_long = 8;
 pub const _POSIX_SEM_NSEMS_MAX: c_long = 256;
 pub const _POSIX_SEM_VALUE_MAX: c_long = 32767;
 pub const _POSIX_SIGQUEUE_MAX: c_long = 32;
+pub const _POSIX_SS_REPL_MAX: c_long = 4;
 pub const _POSIX_SSIZE_MAX: c_long = 32767;
 pub const _POSIX_STREAM_MAX: c_long = 8;
 /// Minimum required value for `SYMLINK_MAX`.

@@ -8,7 +8,7 @@ use crate::{
             PTHREAD_CREATE_DETACHED, PTHREAD_CREATE_JOINABLE, PTHREAD_EXPLICIT_SCHED,
             PTHREAD_INHERIT_SCHED, PTHREAD_SCOPE_PROCESS, PTHREAD_SCOPE_SYSTEM, RlctAttr,
         },
-        sched::{SCHED_FIFO, SCHED_OTHER, SCHED_RR, sched_param},
+        sched::{SCHED_FIFO, SCHED_OTHER, SCHED_RR, SCHED_SPORADIC, sched_param},
     },
     platform::types::{c_int, c_long, c_uchar, c_void, size_t},
     pthread::{Pthread, PthreadFlags},
@@ -391,7 +391,7 @@ pub unsafe extern "C" fn pthread_attr_setschedpolicy(
     policy: c_int,
 ) -> c_int {
     match policy {
-        SCHED_FIFO | SCHED_OTHER | SCHED_RR => {
+        SCHED_FIFO | SCHED_OTHER | SCHED_RR | SCHED_SPORADIC => {
             // infallible, value of constants fit into `c_uchar`
             if let Ok(pol) = policy.try_into() {
                 // SAFTEY: guaranteed to fit
