@@ -12,6 +12,11 @@ after_includes = """
 #include <bits/pid-t.h>    // for pid_t from sys/types
 #include <bits/timespec.h> // for timespec from time.h
 #include <stddef.h>        // for size_t, which the CPU set macros use
+/* The sporadic server's replenishments (limits.h has the same value): the
+ * members of struct sched_param that bound them are tested against it. */
+#ifndef SS_REPL_MAX
+#define SS_REPL_MAX 4
+#endif
 """
 trailer = """
 typedef struct cpu_set_t cpu_set_t;
