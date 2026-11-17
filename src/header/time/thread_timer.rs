@@ -24,6 +24,7 @@
 //! signal that waits, the overrun count in `timer_getoverrun`. The place
 //! counts in the timers of the process.
 
+use super::timer_left::time_left;
 use crate::platform::sys::timer_fire;
 use alloc::{boxed::Box, vec::Vec};
 use core::{
@@ -44,7 +45,7 @@ use crate::{
             pthread_create, pthread_detach, pthread_getcpuclockid, pthread_self,
         },
         sched::{SCHED_FIFO, sched_param},
-        signal::{SIG_BLOCK, SIGEV_SIGNAL, SIGEV_THREAD, pthread_sigmask, sigevent, sigfillset},
+        signal::{SIG_BLOCK, SIGEV_NONE, SIGEV_SIGNAL, SIGEV_THREAD, pthread_sigmask, sigevent, sigfillset},
         time::{
             CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_REALTIME, CLOCK_THREAD_CPUTIME_ID,
             TIMER_ABSTIME, itimerspec, timespec,
@@ -359,16 +360,11 @@ pub fn create(clock: clockid_t, event: &sigevent) -> Result<timer_t, Errno> {
 }
 
 fn remaining(timer: &Timer, inner: &Inner) -> itimerspec {
-    let left = if inner.armed {
-        inner
-            .next
-            .saturating_sub(now(if timer.cpu { timer.clock } else { CLOCK_MONOTONIC }))
-    } else {
-        0
-    };
+    let at = now(if timer.cpu { timer.clock } else { CLOCK_MONOTONIC });
+    let quiet = timer.event.sigev_notify == SIGEV_NONE;
     itimerspec {
         it_interval: to_timespec(inner.interval),
-        it_value: to_timespec(left),
+        it_value: to_timespec(time_left(inner.armed, inner.next, inner.interval, at, quiet)),
     }
 }
 
