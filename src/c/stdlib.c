@@ -146,3 +146,9 @@ double relibc_ldtod(const long double* val) {
 void relibc_dtold(double val, long double* out) {
     *out = (long double)val;
 }
+
+/* strtold does not depend on the locale (the decimal point is always '.'). */
+long double strtold_l(const char *nptr, char **endptr, void *loc) {
+    (void)loc;
+    return strtold(nptr, endptr);
+}

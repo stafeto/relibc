@@ -3,6 +3,11 @@ after_includes = """
 #include <elf.h>
 #include <stddef.h>
 """
+trailer = """
+#ifndef ElfW
+#define ElfW(type) Elf64_##type
+#endif
+"""
 include_guard = "_RELIBC_LINK_H"
 language = "C"
 style = "Tag"

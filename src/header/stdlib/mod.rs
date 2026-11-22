@@ -1727,6 +1727,30 @@ pub unsafe extern "C" fn strtof(s: *const c_char, endptr: *mut *mut c_char) -> c
     })
 }
 
+/// Non-POSIX (glibc, musl and the BSDs have it; libc++ calls it), see
+/// <https://www.man7.org/linux/man-pages/man3/strtod_l.3.html>.
+///
+/// The conversion of `strtod` does not depend on the locale (the decimal point
+/// is always `.`), so the locale argument is not read.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strtod_l(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    _loc: super::bits_locale_t::locale_t,
+) -> c_double {
+    unsafe { strtod(s, endptr) }
+}
+
+/// Non-POSIX, see `strtod_l`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn strtof_l(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    _loc: super::bits_locale_t::locale_t,
+) -> c_float {
+    unsafe { strtof(s, endptr) }
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/strtol.html>.
 ///
 /// Converts the initial portion of the string pointed to by `nptr` to a type
