@@ -321,16 +321,20 @@ pub unsafe extern "C" fn pthread_setschedprio(thread: pthread_t, prio: c_int) ->
 
 /// glibc's `pthread_setaffinity_np`. stafeto keeps one mask for the whole
 /// process (`sched_setaffinity`): the threads made after the call go where it
-/// allows.
+/// allows. A thread other than the caller has no mask of its own, so the call
+/// answers ENOTSUP for it.
 ///
 /// # Safety
 /// `mask` points to `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_setaffinity_np(
-    _thread: pthread_t,
+    thread: pthread_t,
     size: size_t,
     mask: *const crate::header::sched::cpu_set_t,
 ) -> c_int {
+    if thread != unsafe { pthread_self() } {
+        return crate::header::errno::ENOTSUP;
+    }
     if mask.is_null() || size == 0 {
         return crate::header::errno::EFAULT;
     }
@@ -340,16 +344,20 @@ pub unsafe extern "C" fn pthread_setaffinity_np(
     }
 }
 
-/// glibc's `pthread_getaffinity_np`: the mask of the process.
+/// glibc's `pthread_getaffinity_np`: the mask of the process, asked for by a
+/// thread about itself (another thread has no mask of its own: ENOTSUP).
 ///
 /// # Safety
 /// `mask` points to `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pthread_getaffinity_np(
-    _thread: pthread_t,
+    thread: pthread_t,
     size: size_t,
     mask: *mut crate::header::sched::cpu_set_t,
 ) -> c_int {
+    if thread != unsafe { pthread_self() } {
+        return crate::header::errno::ENOTSUP;
+    }
     if mask.is_null() || size == 0 {
         return crate::header::errno::EFAULT;
     }

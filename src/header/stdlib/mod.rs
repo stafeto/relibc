@@ -498,11 +498,15 @@ unsafe fn find_env(search: *const c_char) -> Option<(usize, *mut c_char)> {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/secure_getenv.html>.
 ///
 /// The environment is not consulted by a program that runs with the privileges
-/// of another user than the one who started it.
+/// of another user than the one who started it, or that started in the secure
+/// mode (AT_SECURE of the auxiliary vector, as `setlocale` reads it).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn secure_getenv(name: *const c_char) -> *mut c_char {
     use crate::header::unistd::{getegid, geteuid, getgid, getuid};
-    if getuid() != geteuid() || getgid() != getegid() {
+    let errno = crate::platform::ERRNO.get();
+    let secure = crate::header::sys_auxv::getauxval(crate::header::elf::AT_SECURE as _) != 0;
+    crate::platform::ERRNO.set(errno);
+    if secure || getuid() != geteuid() || getgid() != getegid() {
         return ptr::null_mut();
     }
     unsafe { getenv(name) }
