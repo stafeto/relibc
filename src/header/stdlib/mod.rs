@@ -56,7 +56,6 @@ pub const MB_CUR_MAX: c_int = 4;
 //Maximum number of bytes in a multibyte characters for any locale
 pub const MB_LEN_MAX: c_int = 4;
 
-static ATEXIT_FUNCS: RawCell<[Option<extern "C" fn()>; 32]> = RawCell::new([None; 32]);
 static AT_QUICK_EXIT_FUNCS: RawCell<[Option<extern "C" fn()>; 32]> = RawCell::new([None; 32]);
 static L64A_BUFFER: RawCell<[c_char; 7]> = RawCell::new([0; 7]); // up to 6 digits plus null terminator
 static mut RNG: Option<XorShiftRng> = None;
@@ -187,17 +186,30 @@ pub unsafe extern "C" fn at_quick_exit(func: Option<extern "C" fn()>) -> c_int {
     1
 }
 
+/// The function of `atexit` behind `__cxa_atexit`'s signature.
+extern "C" fn call_atexit_function(function: *mut c_void) {
+    // SAFETY: `atexit` registered a function pointer as the argument.
+    let function: extern "C" fn() = unsafe { mem::transmute(function) };
+    function();
+}
+
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/atexit.html>.
+///
+/// The functions share one list with the destructors of static objects that
+/// `__cxa_atexit` registers, so that `exit` runs both in the reverse order of
+/// their registration, as C++ requires. The list has no fixed size.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atexit(func: Option<extern "C" fn()>) -> c_int {
-    for i in 0..unsafe { ATEXIT_FUNCS.unsafe_ref().len() } {
-        if unsafe { ATEXIT_FUNCS.unsafe_ref() }[i].is_none() {
-            (unsafe { ATEXIT_FUNCS.unsafe_mut() })[i] = func;
-            return 0;
-        }
+    let Some(func) = func else {
+        return 0;
+    };
+    unsafe {
+        crate::cxa::__cxa_atexit(
+            Some(call_atexit_function),
+            func as *mut c_void,
+            ptr::null_mut(),
+        )
     }
-
-    1
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/atof.html>.
@@ -379,11 +391,11 @@ pub unsafe extern "C" fn exit(status: c_int) -> ! {
         static __fini_array_end: extern "C" fn();
     }
 
-    for i in (0..unsafe { ATEXIT_FUNCS.unsafe_ref().len() }).rev() {
-        if let Some(func) = unsafe { ATEXIT_FUNCS.unsafe_ref() }[i] {
-            (func)();
-        }
-    }
+    // The thread-local objects of the calling thread go first, then the
+    // functions of atexit and the destructors of the static objects, newest
+    // first (C++: [basic.start.term]).
+    unsafe { crate::cxa::__cxa_thread_finalize() };
+    unsafe { crate::cxa::__cxa_finalize(ptr::null_mut()) };
 
     // Look for the neighbor functions in memory until the end
     let mut f = core::ptr::from_ref(unsafe { &__fini_array_end });

@@ -48,40 +48,45 @@ pub unsafe extern "C" fn __cxa_atexit(
         dso: dso as usize,
     };
 
-    let mut funcs = CXA_ATEXIT_FUNCS.lock();
-
-    for slot in funcs.iter_mut() {
-        if slot.is_none() {
-            *slot = Some(entry);
-            return 0;
-        }
-    }
-
-    // No empty slots
-    funcs.push(Some(entry));
+    // The newest entry is the last: a registration made while the functions
+    // run (a handler that calls atexit, a static local built in a
+    // destructor) runs before the older ones.
+    CXA_ATEXIT_FUNCS.lock().push(Some(entry));
     0
 }
 
+/// Runs the functions registered by `__cxa_atexit` and `atexit` (a null
+/// `dso` takes all of them, otherwise those of that object), the newest
+/// first. Each entry is taken from the list before it runs, and the list is
+/// not locked during the call: a function may register more, and those run
+/// next.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __cxa_finalize(dso: *mut c_void) {
-    let mut funcs = CXA_ATEXIT_FUNCS.lock();
-
     let dso_usize = dso as usize;
-
-    for slot in funcs.iter_mut().rev() {
-        if let Some(entry) = slot.as_ref()
-            && (dso.is_null() || entry.dso == dso_usize)
-            && let Some(entry_to_run) = slot.take()
-        {
-            (entry_to_run.func)(entry_to_run.arg as *mut c_void);
+    loop {
+        let entry = {
+            let mut funcs = CXA_ATEXIT_FUNCS.lock();
+            let found = funcs.iter().rposition(|slot| {
+                slot.as_ref()
+                    .is_some_and(|entry| dso.is_null() || entry.dso == dso_usize)
+            });
+            let Some(index) = found else {
+                if dso.is_null() {
+                    funcs.clear();
+                } else {
+                    funcs.retain(Option::is_some);
+                }
+                return;
+            };
+            let entry = funcs[index].take();
+            while matches!(funcs.last(), Some(None)) {
+                funcs.pop();
+            }
+            entry
+        };
+        if let Some(entry) = entry {
+            (entry.func)(entry.arg as *mut c_void);
         }
-    }
-
-    // clean up remaining list
-    if dso.is_null() {
-        funcs.clear();
-    } else {
-        funcs.retain(Option::is_some);
     }
 }
 
@@ -97,8 +102,13 @@ pub unsafe extern "C" fn __cxa_thread_atexit_impl(
 
 // called internally
 pub unsafe fn __cxa_thread_finalize() {
-    let mut dtors = DTORS.borrow_mut();
-    while let Some(entry) = dtors.pop() {
+    // The list is not borrowed during a call: a destructor may register
+    // another one (a thread-local object made while an object is destroyed),
+    // which runs next.
+    loop {
+        let Some(entry) = DTORS.borrow_mut().pop() else {
+            break;
+        };
         (entry.func)(entry.obj);
     }
 }
