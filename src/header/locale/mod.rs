@@ -79,14 +79,15 @@ pub unsafe extern "C" fn setlocale(category: c_int, locale: *const c_char) -> *m
     let name = unsafe { CStr::from_ptr(locale).to_str().unwrap_or("C") };
     // "" names the locale of the environment: LC_ALL, then LC_<category>,
     // then LANG, and "C" when none of them is set and non-empty.
-    let resolved = if name.is_empty() {
+    let from_environment = name.is_empty();
+    let resolved = if from_environment {
         environment_locale_name(category)
     } else {
         String::from(name)
     };
     let name = resolved.as_str();
 
-    match locale_for_name(name) {
+    match locale_for_name(name, from_environment) {
         Ok(loc_ptr) => {
             global.data.copy_category(&loc_ptr, category);
             let Some(name) = global.set_name(category, CString::from_str(name).unwrap()) else {
@@ -126,7 +127,8 @@ pub unsafe extern "C" fn newlocale(mask: c_int, locale: *const c_char, base: loc
     let name = unsafe { CStr::from_ptr(locale) }
         .to_string_lossy()
         .into_owned();
-    let name = if name.is_empty() {
+    let from_environment = name.is_empty();
+    let name = if from_environment {
         // The environment's name for the categories of the mask: LC_ALL,
         // then LANG (a single category's variable needs the category, which
         // a mask of several does not have).
@@ -143,7 +145,7 @@ pub unsafe extern "C" fn newlocale(mask: c_int, locale: *const c_char, base: loc
         name
     };
     let name = name.as_str();
-    let mut new_locale = locale_for_name(name);
+    let mut new_locale = locale_for_name(name, from_environment);
     if base != LC_GLOBAL_LOCALE {
         // borrowing here
         let base = base.cast_const().cast::<LocaleData>();
@@ -230,17 +232,21 @@ fn secure_mode() -> bool {
 
 /// The data of the locale `name` (not empty). The multibyte encoding is
 /// always UTF-8, so the names of the UTF-8 forms of the POSIX locale name
-/// that locale. Any other name is a file of the locale definitions. A name
-/// of the form `<something>.UTF-8` or `.utf8` with no file takes the data
-/// of C.UTF-8 and keeps its own name, as musl accepts names it has no
-/// definition for; any other name with no file fails.
-fn locale_for_name(name: &str) -> Result<Box<LocaleData>, Errno> {
+/// that locale. Any other name is a file of the locale definitions; one with
+/// no file fails (POSIX: an unsupported name), and so does a locale asked for
+/// by name with `newlocale`. A name that came from the environment (`""`)
+/// of the form `<something>.UTF-8` or `.utf8` with no file takes the data of
+/// C.UTF-8 under its own name: the user's variable names a locale this
+/// system lacks, and the program goes on with the one encoding it has.
+fn locale_for_name(name: &str, from_environment: bool) -> Result<Box<LocaleData>, Errno> {
     if is_posix_locale_name(name) {
         return Ok(LocaleData::posix());
     }
     match load_locale_file(name) {
         Err(Errno(errno::ENOENT))
-            if !name.contains('/') && (name.ends_with(".UTF-8") || name.ends_with(".utf8")) =>
+            if from_environment
+                && !name.contains('/')
+                && (name.ends_with(".UTF-8") || name.ends_with(".utf8")) =>
         {
             let mut data = LocaleData::posix();
             data.name = CString::from_str(name).map_err(|_| Errno(errno::EINVAL))?;

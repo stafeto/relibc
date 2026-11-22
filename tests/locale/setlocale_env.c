@@ -31,6 +31,14 @@ int main(void) {
         puts("an unknown name was accepted");
         exit(EXIT_FAILURE);
     }
+    // A UTF-8 name of the environment with no definition takes the data of
+    // C.UTF-8 and keeps its name; the same name given by the program fails.
+    setenv("LC_ALL", "xx_XX.UTF-8", 1);
+    check("xx_XX.UTF-8");
+    if (setlocale(LC_ALL, "yy_YY.UTF-8") != NULL) {
+        puts("an unknown explicit name was accepted");
+        exit(EXIT_FAILURE);
+    }
     unsetenv("LC_ALL");
     check("C.UTF-8");
     puts("success!");
