@@ -74,6 +74,7 @@ EXPECT_NAMES=\
 	locale/duplocale \
 	locale/newlocale \
 	locale/setlocale \
+	locale/setlocale_env \
 	malloc/usable_size \
 	math \
 	regex \

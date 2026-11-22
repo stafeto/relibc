@@ -1,3 +1,5 @@
+typedef void *locale_t;
+
 double strtod(const char *nptr, char **endptr);
 int strncasecmp(const char *a, const char *b, unsigned long n);
 
@@ -148,7 +150,7 @@ void relibc_dtold(double val, long double* out) {
 }
 
 /* strtold does not depend on the locale (the decimal point is always '.'). */
-long double strtold_l(const char *nptr, char **endptr, void *loc) {
+long double strtold_l(const char *nptr, char **endptr, locale_t loc) {
     (void)loc;
     return strtold(nptr, endptr);
 }

@@ -5,7 +5,11 @@ after_includes = """
 """
 trailer = """
 #ifndef ElfW
+#ifdef __LP64__
 #define ElfW(type) Elf64_##type
+#else
+#define ElfW(type) Elf32_##type
+#endif
 #endif
 """
 include_guard = "_RELIBC_LINK_H"

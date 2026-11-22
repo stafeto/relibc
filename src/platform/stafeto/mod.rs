@@ -492,12 +492,16 @@ extern "C" fn fork_prepare() {
     crate::header::pthread::tls::fork_lock();
     crate::header::time::fork_lock();
     crate::pthread::fork_lock();
+    // The list of the functions of exit comes before the allocator: its
+    // registrations allocate under its lock.
+    crate::cxa::fork_lock();
     crate::platform::fork_lock_allocator();
 }
 
 /// fork's parent handler: the locks of `fork_prepare` go, last first.
 extern "C" fn fork_parent() {
     crate::platform::fork_unlock_allocator();
+    crate::cxa::fork_unlock();
     crate::pthread::fork_unlock_parent();
     crate::header::time::fork_unlock();
     crate::header::pthread::tls::fork_unlock();
@@ -507,15 +511,14 @@ extern "C" fn fork_parent() {
 }
 
 /// fork's child handler: the locks of `fork_prepare` go, the table of
-/// threads keeps the child's one, and the spin lock of the functions of
-/// exit and the standard streams' locks are free (the threads that may
+/// threads keeps the child's one, and the standard streams' locks are free (the threads that may
 /// have held them are the parent's).
 extern "C" fn fork_child() {
     crate::platform::fork_unlock_allocator();
+    crate::cxa::fork_unlock();
     crate::pthread::fork_unlock_child();
     crate::header::time::fork_unlock();
     crate::header::pthread::tls::fork_unlock();
-    crate::cxa::fork_reset();
     use crate::header::stdio;
     for stream in unsafe { [stdio::stdin, stdio::stdout, stdio::stderr] } {
         if let Some(stream) = unsafe { stream.as_mut() } {

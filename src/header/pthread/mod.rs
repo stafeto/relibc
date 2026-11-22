@@ -418,9 +418,9 @@ pub(crate) fn with_cleanup<R>(
     result
 }
 
+/// Runs the cleanup handlers of pthread_cleanup_push first, then the
+/// destructors of the thread-local objects of C++.
 pub(crate) unsafe fn run_destructor_stack() {
-    unsafe { crate::cxa::__cxa_thread_finalize() };
-
     let mut ptr = CLEANUP_LL_HEAD.get();
 
     while !ptr.is_null() {
@@ -429,4 +429,6 @@ pub(crate) unsafe fn run_destructor_stack() {
 
         (entry.routine)(entry.arg);
     }
+
+    unsafe { crate::cxa::__cxa_thread_finalize() };
 }

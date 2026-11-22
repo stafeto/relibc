@@ -1,7 +1,9 @@
-use crate::platform::types::{c_int, c_void};
+use crate::{
+    platform::types::{c_int, c_void},
+    sync::Mutex,
+};
 use alloc::vec::Vec;
 use core::cell::RefCell;
-use spin::Mutex;
 
 #[derive(Clone, Copy)]
 struct CxaAtExitFunc {
@@ -19,15 +21,17 @@ struct CxaThreadAtExitFunc {
 
 static CXA_ATEXIT_FUNCS: Mutex<Vec<Option<CxaAtExitFunc>>> = Mutex::new(Vec::new());
 
-/// fork on stafeto, in the child: the lock of the functions of exit is
-/// free again. It is a spin lock, which the forking thread may not wait
-/// for on one processor: a thread of the parent that held it is no thread
-/// of the child.
+/// fork on stafeto: the forking thread takes the lock of the list before
+/// the allocator's (the list is the outer lock), so that no thread of the
+/// parent holds it, with the list half changed, when the child starts. The
+/// parent and the child let it go again.
 #[cfg(stafeto)]
-pub(crate) fn fork_reset() {
-    if CXA_ATEXIT_FUNCS.is_locked() {
-        unsafe { CXA_ATEXIT_FUNCS.force_unlock() };
-    }
+pub(crate) fn fork_lock() {
+    unsafe { CXA_ATEXIT_FUNCS.manual_lock() };
+}
+#[cfg(stafeto)]
+pub(crate) fn fork_unlock() {
+    unsafe { CXA_ATEXIT_FUNCS.manual_unlock() };
 }
 #[thread_local]
 static DTORS: RefCell<Vec<CxaThreadAtExitFunc>> = RefCell::new(Vec::new());
@@ -50,8 +54,13 @@ pub unsafe extern "C" fn __cxa_atexit(
 
     // The newest entry is the last: a registration made while the functions
     // run (a handler that calls atexit, a static local built in a
-    // destructor) runs before the older ones.
-    CXA_ATEXIT_FUNCS.lock().push(Some(entry));
+    // destructor) runs before the older ones. Out of memory fails with a
+    // nonzero result.
+    let mut funcs = CXA_ATEXIT_FUNCS.lock();
+    if funcs.try_reserve(1).is_err() {
+        return -1;
+    }
+    funcs.push(Some(entry));
     0
 }
 

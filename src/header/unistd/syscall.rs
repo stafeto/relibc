@@ -32,15 +32,18 @@ const FUTEX_PRIVATE_FLAG: c_int = 128;
 /// `std::atomic::wait`, `std::latch`, `std::barrier` and `std::counting_semaphore`
 /// sleep on it. The timeout of a wait is relative, as on Linux; a wait that
 /// the address's value refuses fails with EAGAIN, one that ends at its timeout
-/// with ETIMEDOUT. Other operations (requeue, bit sets, priority inheritance)
-/// fail with ENOSYS.
+/// with ETIMEDOUT. A null address fails with EFAULT, a misaligned one and a
+/// timeout with a negative field or a nanosecond count outside [0, 1e9) with
+/// EINVAL. Other operations (requeue, bit sets, priority inheritance) and the
+/// flag `FUTEX_CLOCK_REALTIME` (the timeout stays relative on the monotonic
+/// clock) fail with ENOSYS.
 #[cfg(stafeto)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn syscall(sysno: c_long, mut args: ...) -> c_long {
     use crate::{
         error::Errno,
         header::{
-            errno::{EFAULT, ENOSYS},
+            errno::{EFAULT, EINVAL, ENOSYS},
             time::{CLOCK_MONOTONIC, timespec},
         },
         out::Out,
@@ -53,27 +56,37 @@ pub unsafe extern "C" fn syscall(sysno: c_long, mut args: ...) -> c_long {
         return -1;
     }
     // SAFETY: the caller passes the arguments of futex: an address, an
-    // operation, a value, a timeout and two more that no operation here reads.
-    let (addr, op, val, timeout) = unsafe {
+    // operation and a value. The timeout, the fourth, only a wait reads.
+    let (addr, op, val) = unsafe {
         (
             args.next_arg::<*mut u32>(),
             args.next_arg::<c_int>(),
             args.next_arg::<u32>(),
-            args.next_arg::<*const timespec>(),
         )
     };
-    if addr.is_null() || (addr as usize) % 4 != 0 {
+    if addr.is_null() {
         ERRNO.set(EFAULT);
+        return -1;
+    }
+    if (addr as usize) % 4 != 0 {
+        ERRNO.set(EINVAL);
         return -1;
     }
     match op & !FUTEX_PRIVATE_FLAG {
         FUTEX_WAIT => {
+            // SAFETY: a wait passes a fourth argument, the timeout.
+            let timeout = unsafe { args.next_arg::<*const timespec>() };
             // The layer's deadline is absolute on CLOCK_MONOTONIC.
             let deadline = if timeout.is_null() {
                 None
             } else {
                 // SAFETY: a non-null timeout points to a timespec.
                 let relative = unsafe { *timeout };
+                if relative.tv_sec < 0 || relative.tv_nsec < 0 || relative.tv_nsec >= 1_000_000_000
+                {
+                    ERRNO.set(EINVAL);
+                    return -1;
+                }
                 let mut now = MaybeUninit::<timespec>::uninit();
                 if let Err(Errno(e)) =
                     Sys::clock_gettime(CLOCK_MONOTONIC, Out::from_uninit_mut(&mut now))
