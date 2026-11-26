@@ -41,6 +41,12 @@ unsafe extern "C" {
     /// The layer's writev of a stream socket as one send; `isize::MIN`
     /// when `fd` is no such socket.
     fn stafeto_writev_socket(fd: c_int, iov: *const iovec, iovcnt: c_int) -> isize;
+    /// The layer's writev of a file of the data volume as one call, atomic
+    /// against the other calls on the file; `isize::MIN` when `fd` is no such
+    /// file (or the vector has more than 64 parts).
+    fn stafeto_writev_data(fd: c_int, iov: *const iovec, iovcnt: c_int) -> isize;
+    /// The same for readv.
+    fn stafeto_readv_data(fd: c_int, iov: *const iovec, iovcnt: c_int) -> isize;
     fn stafeto_read(fd: c_int, buf: *mut u8, len: usize) -> isize;
     fn stafeto_openat(dirfd: c_int, path: *const c_char, flags: c_int, mode: mode_t) -> c_int;
     fn stafeto_close(fd: c_int) -> c_int;
@@ -438,7 +444,7 @@ pub(crate) unsafe fn dlsym_global(
 const STAFETO_READ_MAX: usize = 1016;
 
 /// The version of the interface of the `stafeto_*` functions.
-const PLATFORM_INTERFACE: u64 = 24;
+const PLATFORM_INTERFACE: u64 = 25;
 
 /// The ABI word relibc and the layer must agree on: the size of the
 /// thread block in bits 0 to 15, its offset in the TCB in bits 16 to 31,
@@ -1381,6 +1387,11 @@ impl Pal for Sys {
         // The parts up to one without its buffer, which the read never
         // reaches (EFAULT when it is the first).
         let parts = valid_parts(parts)?;
+        // A file of the data volume takes the whole vector as one call.
+        let got = unsafe { stafeto_readv_data(fildes, parts.as_ptr(), parts.len() as c_int) };
+        if got != isize::MIN {
+            return ret(got).map(|n| n as usize);
+        }
         let total = parts
             .iter()
             .fold(0usize, |sum, p| sum.saturating_add(p.iov_len));
@@ -1575,6 +1586,11 @@ impl Pal for Sys {
         let parts = valid_parts(all)?;
         // A stream socket takes all the parts as one send.
         let sent = unsafe { stafeto_writev_socket(fildes, parts.as_ptr(), parts.len() as c_int) };
+        if sent != isize::MIN {
+            return ret(sent).map(|n| n as usize);
+        }
+        // A file of the data volume takes the whole vector as one call.
+        let sent = unsafe { stafeto_writev_data(fildes, parts.as_ptr(), parts.len() as c_int) };
         if sent != isize::MIN {
             return ret(sent).map(|n| n as usize);
         }
