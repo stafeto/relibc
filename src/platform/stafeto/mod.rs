@@ -399,6 +399,19 @@ struct SpawnAction {
     path: *const c_char,
 }
 
+/// POSIX: EINVAL when the sum of the lengths of the parts is above SSIZE_MAX,
+/// before any byte moves.
+fn check_total(parts: &[iovec]) -> Result<()> {
+    let mut sum = 0usize;
+    for part in parts {
+        sum = sum
+            .checked_add(part.iov_len)
+            .filter(|sum| *sum <= isize::MAX as usize)
+            .ok_or(Errno(crate::header::errno::EINVAL))?;
+    }
+    Ok(())
+}
+
 /// The parts of a readv or writev before the first that has bytes and no
 /// buffer: the bytes of the parts before it move, and the call gives
 /// their count; EFAULT when the first part is such.
@@ -1384,6 +1397,7 @@ impl Pal for Sys {
             return Err(Errno(EINVAL));
         }
         let parts = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
+        check_total(parts)?;
         // The parts up to one without its buffer, which the read never
         // reaches (EFAULT when it is the first).
         let parts = valid_parts(parts)?;
@@ -1583,6 +1597,7 @@ impl Pal for Sys {
             return Err(Errno(EINVAL));
         }
         let all = unsafe { core::slice::from_raw_parts(iov, iovcnt as usize) };
+        check_total(all)?;
         let parts = valid_parts(all)?;
         // A stream socket takes all the parts as one send.
         let sent = unsafe { stafeto_writev_socket(fildes, parts.as_ptr(), parts.len() as c_int) };
